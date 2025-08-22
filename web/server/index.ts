@@ -15,7 +15,7 @@ import discoveryRoutes from './routes/discovery';
 import generationRoutes from './routes/generation';
 import executionRoutes from './routes/execution';
 import monitoringRoutes from './routes/monitoring';
-import claudeRoutes from './routes/claude';
+import aiChatRoutes from './routes/ai-chat';
 import sessionRoutes from './routes/sessions';
 
 // Import services
@@ -98,16 +98,35 @@ app.use('/api/discovery', discoveryRoutes);
 app.use('/api/generation', generationRoutes);
 app.use('/api/execution', executionRoutes);
 app.use('/api/monitoring', monitoringRoutes);
-app.use('/api/claude', claudeRoutes);
+app.use('/api/ai', aiChatRoutes);
 app.use('/api/sessions', sessionRoutes);
 
 // Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.json({
+app.get('/api/health', async (req, res) => {
+  const health = {
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    version: process.env.npm_package_version || '1.0.0'
-  });
+    version: process.env.npm_package_version || '1.0.0',
+    services: {
+      api: 'healthy',
+      websocket: 'healthy',
+      sessions: 'healthy',
+      ai: process.env.ANTHROPIC_API_KEY ? 'configured' : 'not_configured'
+    }
+  };
+
+  // Check AI service health if available
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      const aiHealthResponse = await fetch(`http://localhost:${PORT}/api/ai/health`);
+      const aiHealth = await aiHealthResponse.json();
+      health.services.ai = aiHealth.status || 'unknown';
+    } catch (error) {
+      health.services.ai = 'error';
+    }
+  }
+
+  res.json(health);
 });
 
 // Error handling middleware

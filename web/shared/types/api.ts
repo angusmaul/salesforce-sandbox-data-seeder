@@ -110,6 +110,103 @@ export interface ClaudeAction {
   data?: any;
 }
 
+// AI Service Types
+export interface AIServiceStatus {
+  status: 'healthy' | 'degraded' | 'unhealthy' | 'unavailable';
+  lastCheck: Date;
+  responseTime?: number;
+  error?: string;
+  uptime: number;
+}
+
+export interface AIUsageStats {
+  totalRequests: number;
+  totalTokens: number;
+  successRate: number;
+  averageResponseTime: number;
+  costEstimate: number;
+  lastReset: Date;
+  rateLimitHits: number;
+}
+
+export interface SchemaAnalysisRequest {
+  sessionId: string;
+  schemaData: any;
+}
+
+export interface SchemaAnalysisResponse {
+  objectType: string;
+  validationRules: ValidationRule[];
+  fieldDependencies: FieldDependency[];
+  suggestions: string[];
+  complexity: 'simple' | 'moderate' | 'complex';
+  riskFactors: string[];
+}
+
+export interface ValidationRule {
+  type: 'required' | 'unique' | 'format' | 'range' | 'custom';
+  field: string;
+  constraint: string;
+  errorMessage?: string;
+  severity: 'error' | 'warning';
+}
+
+export interface FieldDependency {
+  sourceField: string;
+  targetField: string;
+  type: 'required_if' | 'conditional' | 'lookup' | 'formula';
+  condition?: string;
+}
+
+export interface FieldSuggestionRequest {
+  sessionId: string;
+  objectType: string;
+  fieldType: string;
+  context?: any;
+}
+
+export interface FieldSuggestion {
+  field: string;
+  value: any;
+  confidence: number;
+  reasoning: string;
+  alternatives?: any[];
+}
+
+export interface DataValidationRequest {
+  sessionId: string;
+  data: any;
+  validationRules: ValidationRule[];
+}
+
+export interface ValidationResult {
+  isValid: boolean;
+  violations: ValidationViolation[];
+  suggestions: string[];
+  riskScore: number;
+}
+
+export interface ValidationViolation {
+  field: string;
+  rule: string;
+  severity: 'error' | 'warning';
+  message: string;
+  suggestedFix?: string;
+}
+
+export interface NaturalLanguageRequest {
+  sessionId: string;
+  userInput: string;
+}
+
+export interface ActionPlan {
+  action: 'configure' | 'navigate' | 'generate' | 'validate' | 'explain';
+  parameters: Record<string, any>;
+  explanation: string;
+  confidence: number;
+  steps?: string[];
+}
+
 // Import types from CLI
 import { 
   SalesforceConnection, 
