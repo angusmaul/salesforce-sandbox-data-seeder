@@ -8,12 +8,28 @@ const { v4: uuidv4 } = require('uuid');
 const { faker } = require('@faker-js/faker');
 const { FieldDataGenerator, SALESFORCE_FIELD_TYPES } = require('./lib/salesforce-field-types');
 const { getCachedMapping, getRandomStateForCountry } = require('./lib/picklist-decoder');
+const { ConstraintSolver } = require('./lib/constraint-solver');
 const archiver = require('archiver');
 const jsforce = require('jsforce');
 const fs = require('fs');
 const path = require('path');
 // Use native fetch in Node.js 18+ or polyfill for older versions
 const fetch = globalThis.fetch || require('node-fetch');
+
+// Validation Engine imports (TypeScript compiled to JS)
+let ValidationEngine, AIService, EnhancedDiscoveryService;
+try {
+  // These will be compiled TypeScript modules
+  const { ValidationEngine: VE } = require('./services/validation-engine');
+  const { AIService: AIS } = require('./services/ai-service');
+  const { EnhancedDiscoveryService: EDS } = require('./services/enhanced-discovery');
+  ValidationEngine = VE;
+  AIService = AIS;
+  EnhancedDiscoveryService = EDS;
+} catch (error) {
+  console.warn('⚠️ Validation Engine modules not available (may need compilation):', error.message);
+  // Graceful fallback - validation engine features will be disabled
+}
 
 const app = express();
 const server = createServer(app);
@@ -90,6 +106,81 @@ const sessions = new PersistentStorage(SESSION_FILE);
 const oauthConfigs = new PersistentStorage(OAUTH_FILE);
 
 console.log(`💾 Loaded ${Object.keys(sessions.data).length} existing sessions from storage`);
+
+// Initialize AI and Validation services (with fallback for missing modules)
+let aiService = null;
+let validationEngine = null;
+let enhancedDiscovery = null;
+
+function initializeValidationEngine() {
+  if (!ValidationEngine || !AIService || !EnhancedDiscoveryService) {
+    console.log('⚠️ Validation Engine features disabled - modules not available');
+    return;
+  }
+
+  try {
+    // Initialize AI service if Claude API key is available
+    const claudeApiKey = process.env.CLAUDE_API_KEY;
+    if (claudeApiKey) {
+      aiService = new AIService({
+        apiKey: claudeApiKey,
+        model: 'claude-3-sonnet-20240229',
+        maxTokens: 1000,
+        temperature: 0.7,
+        usageTrackingEnabled: true
+      });
+      console.log('✅ AI Service initialized with Claude API');
+    } else {
+      console.log('⚠️ Claude API key not found - AI features will be disabled');
+    }
+
+    // Initialize enhanced discovery service with mock Salesforce service for now
+    // This will be properly integrated when connected to Salesforce
+    
+    console.log('✅ Validation Engine infrastructure ready');
+  } catch (error) {
+    console.error('❌ Failed to initialize Validation Engine:', error.message);
+  }
+}
+
+// Initialize validation engine
+initializeValidationEngine();
+
+// Helper function to initialize validation engine for a session with Salesforce connection
+async function initializeSessionValidationEngine(sessionId, conn) {
+  if (!ValidationEngine || !EnhancedDiscoveryService) {
+    return null;
+  }
+
+  try {
+    // Create Salesforce service wrapper for the connection
+    const salesforceService = {
+      getConnection: () => conn
+    };
+
+    // Initialize enhanced discovery service
+    const sessionEnhancedDiscovery = new EnhancedDiscoveryService(salesforceService);
+    
+    // Initialize validation engine
+    const sessionValidationEngine = new ValidationEngine({
+      aiService: aiService,
+      enhancedDiscovery: sessionEnhancedDiscovery,
+      enableAIAnalysis: aiService !== null,
+      cacheValidationResults: true,
+      maxConcurrentValidations: 5,
+      useLocalValidationFirst: true
+    });
+
+    console.log(`✅ Session validation engine initialized for session: ${sessionId}`);
+    return {
+      validationEngine: sessionValidationEngine,
+      enhancedDiscovery: sessionEnhancedDiscovery
+    };
+  } catch (error) {
+    console.error(`❌ Failed to initialize session validation engine for ${sessionId}:`, error.message);
+    return null;
+  }
+}
 
 // Cleanup expired sessions (older than 24 hours)
 function cleanupExpiredSessions() {
@@ -3038,6 +3129,79 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
     records.push(record);
   }
   
+  // Enhanced data generation with validation engine (if available)
+  if (ValidationEngine && EnhancedDiscoveryService && records.length > 0) {
+    try {
+      const sessionServices = await initializeSessionValidationEngine(sessionId, conn);
+      if (sessionServices) {
+        console.log(`🔍 Applying validation engine to ${records.length} ${objectName} records...`);
+        io.to(sessionId).emit('execution-log', `🧠 Analyzing validation rules for ${objectName}...`);
+        
+        // Pre-validate and enhance records using validation engine
+        const validationRequest = {
+          objectName,
+          data: records,
+          skipAIAnalysis: records.length > 50, // Skip AI for large batches to avoid rate limits
+          includeWarnings: true,
+          validationLevel: 'standard'
+        };
+
+        const validationResult = await sessionServices.validationEngine.validateData(validationRequest);
+        
+        if (validationResult.invalidRecords > 0) {
+          console.log(`⚠️ Validation found ${validationResult.invalidRecords} invalid records, attempting fixes...`);
+          io.to(sessionId).emit('execution-log', `🔧 Fixing ${validationResult.invalidRecords} validation issues...`);
+          
+          // Apply suggested fixes to invalid records
+          const fixedRecords = [];
+          for (let i = 0; i < records.length; i++) {
+            const recordResult = validationResult.results[i];
+            let fixedRecord = { ...records[i] };
+            
+            if (!recordResult.isValid && recordResult.suggestedFixes.length > 0) {
+              // Apply fixes with high confidence
+              recordResult.suggestedFixes
+                .filter(fix => fix.confidence >= 0.7)
+                .forEach(fix => {
+                  if (fix.suggestedValue !== null && fix.suggestedValue !== undefined) {
+                    fixedRecord[fix.field] = fix.suggestedValue;
+                    console.log(`🔧 Fixed ${objectName}[${i}].${fix.field}: ${fix.reason}`);
+                  }
+                });
+            }
+            
+            fixedRecords.push(fixedRecord);
+          }
+          
+          // Update records with fixes
+          records.splice(0, records.length, ...fixedRecords);
+          
+          // Report validation results
+          const successRate = ((validationResult.validRecords / validationResult.totalRecords) * 100).toFixed(1);
+          io.to(sessionId).emit('execution-log', `✅ Validation complete: ${successRate}% success rate (${validationResult.validRecords}/${validationResult.totalRecords})`);
+          
+          if (validationResult.recommendations.length > 0) {
+            io.to(sessionId).emit('execution-log', `💡 Recommendations: ${validationResult.recommendations.join(', ')}`);
+          }
+        } else {
+          console.log(`✅ All ${records.length} ${objectName} records passed validation`);
+          io.to(sessionId).emit('execution-log', `✅ All ${objectName} records passed validation checks`);
+        }
+        
+        // Clean up validation engine resources
+        sessionServices.validationEngine.destroy();
+        sessionServices.enhancedDiscovery.destroy();
+        
+      } else {
+        console.log(`⚠️ Validation engine not available for session ${sessionId}`);
+      }
+    } catch (validationError) {
+      console.warn(`⚠️ Validation engine failed for ${objectName}:`, validationError.message);
+      io.to(sessionId).emit('execution-log', `⚠️ Validation analysis failed: ${validationError.message}`);
+      // Continue without validation enhancement
+    }
+  }
+  
   console.log(`✅ Generated ${records.length} records for ${objectName}. Sample record:`, JSON.stringify(records[0], null, 2));
   
   return records;
@@ -4099,6 +4263,283 @@ app.use((error, req, res, next) => {
   res.status(500).json({
     error: { message: 'Internal Server Error' }
   });
+});
+
+// Validation Engine API Endpoints
+
+// Analyze validation rules for an object
+app.post('/api/validation/analyze/:sessionId', async (req, res) => {
+  try {
+    const sessionId = req.params.sessionId;
+    const { objectName } = req.body;
+    
+    if (!objectName) {
+      return res.status(400).json({
+        success: false,
+        error: 'Object name is required'
+      });
+    }
+    
+    const session = sessions.get(sessionId);
+    if (!session?.connectionInfo?.accessToken) {
+      return res.status(401).json({
+        success: false,
+        error: 'No active Salesforce connection'
+      });
+    }
+    
+    if (!ValidationEngine || !EnhancedDiscoveryService) {
+      return res.status(503).json({
+        success: false,
+        error: 'Validation engine not available'
+      });
+    }
+    
+    const conn = new jsforce.Connection({
+      instanceUrl: session.connectionInfo.instanceUrl,
+      accessToken: session.connectionInfo.accessToken,
+      version: session.connectionInfo.apiVersion || '59.0'
+    });
+    
+    const sessionServices = await initializeSessionValidationEngine(sessionId, conn);
+    if (!sessionServices) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to initialize validation engine'
+      });
+    }
+    
+    const analysis = await sessionServices.validationEngine.analyzeValidationRules(objectName);
+    
+    // Clean up
+    sessionServices.validationEngine.destroy();
+    sessionServices.enhancedDiscovery.destroy();
+    
+    res.json({
+      success: true,
+      data: analysis
+    });
+    
+  } catch (error) {
+    console.error('Validation analysis error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Pre-validate data generation pattern
+app.post('/api/validation/pre-validate/:sessionId', async (req, res) => {
+  try {
+    const sessionId = req.params.sessionId;
+    const { objectName, generationConfig } = req.body;
+    
+    if (!objectName || !generationConfig) {
+      return res.status(400).json({
+        success: false,
+        error: 'Object name and generation config are required'
+      });
+    }
+    
+    const session = sessions.get(sessionId);
+    if (!session?.connectionInfo?.accessToken) {
+      return res.status(401).json({
+        success: false,
+        error: 'No active Salesforce connection'
+      });
+    }
+    
+    if (!ValidationEngine || !EnhancedDiscoveryService) {
+      return res.status(503).json({
+        success: false,
+        error: 'Validation engine not available'
+      });
+    }
+    
+    const conn = new jsforce.Connection({
+      instanceUrl: session.connectionInfo.instanceUrl,
+      accessToken: session.connectionInfo.accessToken,
+      version: session.connectionInfo.apiVersion || '59.0'
+    });
+    
+    const sessionServices = await initializeSessionValidationEngine(sessionId, conn);
+    if (!sessionServices) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to initialize validation engine'
+      });
+    }
+    
+    const validationResult = await sessionServices.validationEngine.preValidateGenerationPattern(
+      objectName,
+      generationConfig
+    );
+    
+    // Clean up
+    sessionServices.validationEngine.destroy();
+    sessionServices.enhancedDiscovery.destroy();
+    
+    res.json({
+      success: true,
+      data: validationResult
+    });
+    
+  } catch (error) {
+    console.error('Pre-validation error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Generate constraint-compliant records
+app.post('/api/validation/generate-compliant/:sessionId', async (req, res) => {
+  try {
+    const sessionId = req.params.sessionId;
+    const { objectName, recordCount = 5, existingValues = {} } = req.body;
+    
+    if (!objectName) {
+      return res.status(400).json({
+        success: false,
+        error: 'Object name is required'
+      });
+    }
+    
+    const session = sessions.get(sessionId);
+    if (!session?.connectionInfo?.accessToken) {
+      return res.status(401).json({
+        success: false,
+        error: 'No active Salesforce connection'
+      });
+    }
+    
+    if (!ValidationEngine || !EnhancedDiscoveryService) {
+      // Fallback to standard generation
+      return res.status(503).json({
+        success: false,
+        error: 'Validation engine not available - use standard generation'
+      });
+    }
+    
+    const conn = new jsforce.Connection({
+      instanceUrl: session.connectionInfo.instanceUrl,
+      accessToken: session.connectionInfo.accessToken,
+      version: session.connectionInfo.apiVersion || '59.0'
+    });
+    
+    const sessionServices = await initializeSessionValidationEngine(sessionId, conn);
+    if (!sessionServices) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to initialize validation engine'
+      });
+    }
+    
+    // Get object schema with validation rules
+    const enhancedObject = await sessionServices.enhancedDiscovery.getEnhancedObject(objectName, {
+      includeValidationRules: true,
+      includeSchemaAnalysis: true
+    });
+    
+    // Initialize constraint solver
+    const constraintSolver = new ConstraintSolver({
+      seedValue: Date.now(),
+      useRealisticData: true,
+      maxAttempts: 10
+    });
+    
+    // Extract validation context
+    const validationRules = enhancedObject.validationRules || [];
+    const fieldConstraints = enhancedObject.schemaAnalysis?.fieldConstraints || [];
+    const fieldDependencies = enhancedObject.schemaAnalysis?.fieldDependencies || [];
+    
+    // Generate compliant records
+    const records = await constraintSolver.generateCompliantRecords(
+      recordCount,
+      enhancedObject,
+      validationRules,
+      fieldConstraints,
+      fieldDependencies
+    );
+    
+    // Validate the generated records
+    const validationRequest = {
+      objectName,
+      data: records,
+      skipAIAnalysis: false,
+      includeWarnings: true,
+      validationLevel: 'comprehensive'
+    };
+    
+    const validationResult = await sessionServices.validationEngine.validateData(validationRequest);
+    
+    // Clean up
+    sessionServices.validationEngine.destroy();
+    sessionServices.enhancedDiscovery.destroy();
+    
+    res.json({
+      success: true,
+      data: {
+        records,
+        validation: {
+          totalRecords: validationResult.totalRecords,
+          validRecords: validationResult.validRecords,
+          invalidRecords: validationResult.invalidRecords,
+          successRate: ((validationResult.validRecords / validationResult.totalRecords) * 100).toFixed(1) + '%',
+          riskScore: validationResult.overallRiskScore,
+          recommendations: validationResult.recommendations
+        },
+        performance: validationResult.enginePerformance
+      }
+    });
+    
+  } catch (error) {
+    console.error('Compliant generation error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Get validation engine performance metrics
+app.get('/api/validation/metrics/:sessionId', async (req, res) => {
+  try {
+    const sessionId = req.params.sessionId;
+    
+    if (!aiService) {
+      return res.json({
+        success: true,
+        data: {
+          aiService: null,
+          validationEngine: 'not_available'
+        }
+      });
+    }
+    
+    const metrics = aiService.getUsageStats();
+    const health = aiService.getHealthStatus();
+    
+    res.json({
+      success: true,
+      data: {
+        aiService: {
+          usage: metrics,
+          health: health
+        },
+        validationEngine: 'available'
+      }
+    });
+    
+  } catch (error) {
+    console.error('Metrics error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
 });
 
 // 404 handler
