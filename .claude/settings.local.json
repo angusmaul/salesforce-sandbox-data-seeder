@@ -35,7 +35,20 @@
       "WebSearch",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(grep:*)",
+      "Bash(test:*)",
+      "Bash(bash:*)",
+      "Bash(gh auth:*)",
+      "Bash(gh issue create:*)",
+      "Bash(cp:*)",
+      "Bash(gh extension:*)",
+      "WebFetch(domain:)",
+      "Bash(gh issue view:*)",
+      "Bash(gh issue list:*)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
     ]
   }
 }

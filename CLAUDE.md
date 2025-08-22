@@ -66,7 +66,16 @@ Using the test-runner agent ensures:
 
 ## Project-Specific Instructions
 
-Add your project-specific instructions here.
+### Memory Management for Parallel Operations
+
+When working with CCPM parallel sync operations:
+
+1. **Node.js Heap Configuration**: Set `NODE_OPTIONS="--max-old-space-size=8192"` for 8GB heap limit
+2. **Batch GitHub API Calls**: Process issues in chunks of 50-100 instead of fetching all at once
+3. **Limit Concurrent Agents**: Respect the documented 5-8 parallel task limit
+4. **Implement Streaming**: Process and release data incrementally rather than accumulating
+5. **Add Cleanup Cycles**: Clear reference stores and temporary objects periodically
+6. **Monitor Memory Usage**: Use `process.memoryUsage()` to track heap consumption during operations
 
 ## Testing
 
