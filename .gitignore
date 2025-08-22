@@ -1,1 +1,59 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+dist/
+*.tsbuildinfo
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Coverage reports
+coverage/
+
+# Configuration files with sensitive data
+config/local.json
+config/credentials.json
+
+# Test outputs
+test-results/
+
+# Debug and test files with potential credentials
+debug-*.js
+test-*.js
+check-*.js
+demo-mode.js
+
+# Large analysis files
+*-analysis.json
+*-schema.json
+account-fields.json
+object-lists.json
+load-order.txt
+dependencies.txt
+test-objects.json
+
+# MCP config files
+mcp-*.json
+mcp-*.js

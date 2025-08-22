@@ -5,7 +5,6 @@
       "Bash(.claude/scripts/test-and-log.sh:*)",
       "Bash(bash .claude/scripts/pm/*)",
       "Bash(.claude/scripts/pm/*)",
-
       "Bash(cat *)",
       "Bash(cat:*)",
       "Bash(composer *)",
@@ -33,7 +32,10 @@
       "Bash(tree *)",
       "List(**)",
       "WebFetch(domain:github.com)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ]
   }
 }

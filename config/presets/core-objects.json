@@ -1,0 +1,37 @@
+{
+  "name": "Core Business Objects",
+  "description": "Essential Salesforce objects for most business scenarios",
+  "includedObjects": [
+    "Account",
+    "Contact", 
+    "Lead",
+    "Opportunity",
+    "Case",
+    "Task",
+    "Product2",
+    "Pricebook2",
+    "PricebookEntry"
+  ],
+  "loadOrder": [
+    "Account",
+    "Contact",
+    "Lead", 
+    "Product2",
+    "Pricebook2",
+    "PricebookEntry",
+    "Opportunity",
+    "Case",
+    "Task"
+  ],
+  "defaultRecordsPerObject": {
+    "Account": 50,
+    "Contact": 100,
+    "Lead": 75,
+    "Opportunity": 40,
+    "Case": 30,
+    "Task": 150,
+    "Product2": 25,
+    "Pricebook2": 2,
+    "PricebookEntry": 50
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "name": "Relationship-Aware Load Order",
+  "description": "Objects loaded in dependency order to respect foreign key constraints",
+  "includedObjects": [
+    "DandBCompany",
+    "OperatingHours", 
+    "Account",
+    "Individual",
+    "Contact",
+    "AccountContactRole",
+    "Pricebook2",
+    "Opportunity",
+    "Lead",
+    "Case",
+    "Task",
+    "Product2",
+    "PricebookEntry"
+  ],
+  "loadOrder": [
+    "DandBCompany",
+    "OperatingHours",
+    "Account", 
+    "Individual",
+    "Contact",
+    "AccountContactRole",
+    "Pricebook2",
+    "Product2",
+    "PricebookEntry",
+    "Opportunity",
+    "Lead",
+    "Case",
+    "Task"
+  ],
+  "defaultRecordsPerObject": {
+    "DandBCompany": 10,
+    "OperatingHours": 5,
+    "Account": 50,
+    "Individual": 25,
+    "Contact": 100,
+    "AccountContactRole": 75,
+    "Pricebook2": 2,
+    "Product2": 25,
+    "PricebookEntry": 50,
+    "Opportunity": 40,
+    "Lead": 75,
+    "Case": 30,
+    "Task": 150
+  }
+}

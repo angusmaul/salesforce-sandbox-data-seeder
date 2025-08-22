@@ -1,0 +1,19 @@
+{
+  "name": "sales-cloud",
+  "description": "Standard Sales Cloud objects for CRM testing",
+  "includedObjects": [
+    "Account",
+    "Contact",
+    "Lead",
+    "Opportunity",
+    "Case",
+    "Campaign",
+    "Task",
+    "Event"
+  ],
+  "excludePatterns": [
+    "*History",
+    "*Share",
+    "*Feed"
+  ]
+}

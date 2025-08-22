@@ -1,471 +1,305 @@
-# Claude Code PM
+# Salesforce Sandbox Data Seeder
 
-[![Automaze](https://img.shields.io/badge/By-automaze.io-4b3baf)](https://automaze.io)
-&nbsp;
-[![Claude Code](https://img.shields.io/badge/+-Claude%20Code-d97757)](https://github.com/automazeio/ccpm/blob/main/README.md)
-[![GitHub Issues](https://img.shields.io/badge/+-GitHub%20Issues-1f2328)](https://github.com/automazeio/ccpm)
-&nbsp;
-[![MIT License](https://img.shields.io/badge/License-MIT-28a745)](https://github.com/automazeio/ccpm/blob/main/LICENSE)
-&nbsp;
-[![Follow on 𝕏](https://img.shields.io/badge/𝕏-@aroussi-1c9bf0)](http://x.com/intent/follow?screen_name=aroussi)
-&nbsp;
-[![Star this repo](https://img.shields.io/badge/★-Star%20this%20repo-e7b10b)](https://github.com/automazeio/ccpm)
+A comprehensive tool with both **CLI** and **Web Interface** to discover Salesforce sandbox data models and generate realistic sample data for testing and development.
 
-### Claude Code workflow to ship ~~faster~~ _better_ using spec-driven development, GitHub issues, Git worktrees, and mutiple AI agents running in parallel.
+## Features
 
-Stop losing context. Stop blocking on tasks. Stop shipping bugs. This battle-tested system turns PRDs into epics, epics into GitHub issues, and issues into production code – with full traceability at every step.
+### Core Capabilities
+- 🔍 **Data Model Discovery**: Automatically discover Salesforce objects, fields, and relationships with intelligent filtering
+- 📊 **Storage-Aware Generation**: Intelligent record counting based on 80% storage threshold (2KB per record)
+- 🎯 **Smart Object Selection**: Interactive selection with presets, load order analysis, and dependency detection
+- 🎲 **Business-Realistic Data**: Generate contextual business data using Faker.js with proper Account-Contact relationships
+- 🔗 **Relationship Management**: Automatic relationship linking with real Salesforce IDs
+- 📝 **Comprehensive Logging**: Detailed session logs with generated data, success/failure tracking, and error details
+- 📦 **REST API Integration**: Reliable data insertion using Salesforce REST API
+- 🛡️ **Smart Field Handling**: Intelligent RecordType detection and system field exclusion
+- ⚙️ **Configuration Management**: Save and reuse settings and object selections
 
-![Claude Code PM](screenshot.webp)
+### Web Interface Features
+- 🌐 **Modern Web UI**: Full-featured web interface with guided wizard workflow
+- 🔄 **Real-time Progress**: Live progress tracking with WebSocket updates during discovery and execution
+- 🎨 **Interactive Selection**: Visual object selection with categorization and filtering
+- 📈 **Storage Visualization**: Real-time storage usage monitoring and validation
+- 🔧 **Field Analysis**: Detailed field analysis with dependency mapping
+- 📋 **Session Management**: Persistent sessions with automatic credential storage and reconnection
+- 🚀 **One-Click Setup**: Simple External Client App credential setup with clear instructions
 
-## Table of Contents
+## Prerequisites
 
-- [Background](#background)
-- [The Workflow](#the-workflow)
-- [What Makes This Different?](#what-makes-this-different)
-- [Why GitHub Issues?](#why-github-issues)
-- [Core Principle: No Vibe Coding](#core-principle-no-vibe-coding)
-- [System Architecture](#system-architecture)
-- [Workflow Phases](#workflow-phases)
-- [Command Reference](#command-reference)
-- [The Parallel Execution System](#the-parallel-execution-system)
-- [Key Features & Benefits](#key-features--benefits)
-- [Proven Results](#proven-results)
-- [Example Flow](#example-flow)
-- [Get Started Now](#get-started-now)
-- [Local vs Remote](#local-vs-remote)
-- [Technical Notes](#technical-notes)
-- [Support This Project](#support-this-project)
+- Node.js 16 or higher
+- Salesforce External Client App with OAuth Client Credentials flow configured
+- Access to a Salesforce sandbox (not production)
 
-## Background
-
-Every team struggles with the same problems:
-- **Context evaporates** between sessions, forcing constant re-discovery
-- **Parallel work creates conflicts** when multiple developers touch the same code
-- **Requirements drift** as verbal decisions override written specs
-- **Progress becomes invisible** until the very end
-
-This system solves all of that.
-
-## The Workflow
-
-```mermaid
-graph LR
-    A[PRD Creation] --> B[Epic Planning]
-    B --> C[Task Decomposition]
-    C --> D[GitHub Sync]
-    D --> E[Parallel Execution]
-```
-
-### See It In Action (60 seconds)
+## Installation
 
 ```bash
-# Create a comprehensive PRD through guided brainstorming
-/pm:prd-new memory-system
-
-# Transform PRD into a technical epic with task breakdown
-/pm:prd-parse memory-system
-
-# Push to GitHub and start parallel execution
-/pm:epic-oneshot memory-system
-/pm:issue-start 1235
+npm install
+npm run build
 ```
 
-## What Makes This Different?
+## Configuration
 
-| Traditional Development | Claude Code PM System |
-|------------------------|----------------------|
-| Context lost between sessions | **Persistent context** across all work |
-| Serial task execution | **Parallel agents** on independent tasks |
-| "Vibe coding" from memory | **Spec-driven** with full traceability |
-| Progress hidden in branches | **Transparent audit trail** in GitHub |
-| Manual task coordination | **Intelligent prioritization** with `/pm:next` |
+### External Client App Setup
 
-## Why GitHub Issues?
+1. In Salesforce Setup, create an External Client App with:
+   - Enable OAuth Settings
+   - Enable Client Credentials Flow
+   - Select appropriate scopes (API, etc.)
+   - Assign to an integration user
 
-Most Claude Code workflows operate in isolation – a single developer working with AI in their local environment. This creates a fundamental problem: **AI-assisted development becomes a silo**.
-
-By using GitHub Issues as our database, we unlock something powerful:
-
-### 🤝 **True Team Collaboration**
-- Multiple Claude instances can work on the same project simultaneously
-- Human developers see AI progress in real-time through issue comments
-- Team members can jump in anywhere – the context is always visible
-- Managers get transparency without interrupting flow
-
-### 🔄 **Seamless Human-AI Handoffs**
-- AI can start a task, human can finish it (or vice versa)
-- Progress updates are visible to everyone, not trapped in chat logs
-- Code reviews happen naturally through PR comments
-- No "what did the AI do?" meetings
-
-### 📈 **Scalable Beyond Solo Work**
-- Add team members without onboarding friction
-- Multiple AI agents working in parallel on different issues
-- Distributed teams stay synchronized automatically
-- Works with existing GitHub workflows and tools
-
-### 🎯 **Single Source of Truth**
-- No separate databases or project management tools
-- Issue state is the project state
-- Comments are the audit trail
-- Labels provide organization
-
-This isn't just a project management system – it's a **collaboration protocol** that lets humans and AI agents work together at scale, using infrastructure your team already trusts.
-
-## Core Principle: No Vibe Coding
-
-> **Every line of code must trace back to a specification.**
-
-We follow a strict 5-phase discipline:
-
-1. **🧠 Brainstorm** - Think deeper than comfortable
-2. **📝 Document** - Write specs that leave nothing to interpretation
-3. **📐 Plan** - Architect with explicit technical decisions
-4. **⚡ Execute** - Build exactly what was specified
-5. **📊 Track** - Maintain transparent progress at every step
-
-No shortcuts. No assumptions. No regrets.
-
-## System Architecture
-
-```
-.claude/
-├── CLAUDE.md          # Always-on instructions (copy content to your project's CLAUDE.md file)
-├── agents/            # Task-oriented agents (for context preservation)
-├── commands/          # Command definitions
-│   ├── context/       # Create, update, and prime context
-│   ├── pm/            # ← Project management commands (this system)
-│   └── testing/       # Prime and execute tests (edit this)
-├── context/           # Project-wide context files
-├── epics/             # ← PM's local workspace (place in .gitignore)
-│   └── [epic-name]/   # Epic and related tasks
-│       ├── epic.md    # Implementation plan
-│       ├── [#].md     # Individual task files
-│       └── updates/   # Work-in-progress updates
-├── prds/              # ← PM's PRD files
-├── rules/             # Place any rule files you'd like to reference here
-└── scripts/           # Place any script files you'd like to use here
-```
-
-## Workflow Phases
-
-### 1. Product Planning Phase
-
-```bash
-/pm:prd-new feature-name
-```
-Launches comprehensive brainstorming to create a Product Requirements Document capturing vision, user stories, success criteria, and constraints.
-
-**Output:** `.claude/prds/feature-name.md`
-
-### 2. Implementation Planning Phase
-
-```bash
-/pm:prd-parse feature-name
-```
-Transforms PRD into a technical implementation plan with architectural decisions, technical approach, and dependency mapping.
-
-**Output:** `.claude/epics/feature-name/epic.md`
-
-### 3. Task Decomposition Phase
-
-```bash
-/pm:epic-decompose feature-name
-```
-Breaks epic into concrete, actionable tasks with acceptance criteria, effort estimates, and parallelization flags.
-
-**Output:** `.claude/epics/feature-name/[task].md`
-
-### 4. GitHub Synchronization
-
-```bash
-/pm:epic-sync feature-name
-# Or for confident workflows:
-/pm:epic-oneshot feature-name
-```
-Pushes epic and tasks to GitHub as issues with appropriate labels and relationships.
-
-### 5. Execution Phase
-
-```bash
-/pm:issue-start 1234  # Launch specialized agent
-/pm:issue-sync 1234   # Push progress updates
-/pm:next             # Get next priority task
-```
-Specialized agents implement tasks while maintaining progress updates and an audit trail.
-
-## Command Reference
-
-> [!TIP]
-> Type `/pm:help` for a concise command summary
-
-### Initial Setup
-- `/pm:init` - Install dependencies and configure GitHub
-
-### PRD Commands
-- `/pm:prd-new` - Launch brainstorming for new product requirement
-- `/pm:prd-parse` - Convert PRD to implementation epic
-- `/pm:prd-list` - List all PRDs
-- `/pm:prd-edit` - Edit existing PRD
-- `/pm:prd-status` - Show PRD implementation status
-
-### Epic Commands
-- `/pm:epic-decompose` - Break epic into task files
-- `/pm:epic-sync` - Push epic and tasks to GitHub
-- `/pm:epic-oneshot` - Decompose and sync in one command
-- `/pm:epic-list` - List all epics
-- `/pm:epic-show` - Display epic and its tasks
-- `/pm:epic-close` - Mark epic as complete
-- `/pm:epic-edit` - Edit epic details
-- `/pm:epic-refresh` - Update epic progress from tasks
-
-### Issue Commands
-- `/pm:issue-show` - Display issue and sub-issues
-- `/pm:issue-status` - Check issue status
-- `/pm:issue-start` - Begin work with specialized agent
-- `/pm:issue-sync` - Push updates to GitHub
-- `/pm:issue-close` - Mark issue as complete
-- `/pm:issue-reopen` - Reopen closed issue
-- `/pm:issue-edit` - Edit issue details
-
-### Workflow Commands
-- `/pm:next` - Show next priority issue with epic context
-- `/pm:status` - Overall project dashboard
-- `/pm:standup` - Daily standup report
-- `/pm:blocked` - Show blocked tasks
-- `/pm:in-progress` - List work in progress
-
-### Sync Commands
-- `/pm:sync` - Full bidirectional sync with GitHub
-- `/pm:import` - Import existing GitHub issues
-
-### Maintenance Commands
-- `/pm:validate` - Check system integrity
-- `/pm:clean` - Archive completed work
-- `/pm:search` - Search across all content
-
-## The Parallel Execution System
-
-### Issues Aren't Atomic
-
-Traditional thinking: One issue = One developer = One task
-
-**Reality: One issue = Multiple parallel work streams**
-
-A single "Implement user authentication" issue isn't one task. It's...
-
-- **Agent 1**: Database tables and migrations
-- **Agent 2**: Service layer and business logic
-- **Agent 3**: API endpoints and middleware
-- **Agent 4**: UI components and forms
-- **Agent 5**: Test suites and documentation
-
-All running **simultaneously** in the same worktree.
-
-### The Math of Velocity
-
-**Traditional Approach:**
-- Epic with 3 issues
-- Sequential execution
-
-**This System:**
-- Same epic with 3 issues
-- Each issue splits into ~4 parallel streams
-- **12 agents working simultaneously**
-
-We're not assigning agents to issues. We're **leveraging multiple agents** to ship faster.
-
-### Context Optimization
-
-**Traditional single-thread approach:**
-- Main conversation carries ALL the implementation details
-- Context window fills with database schemas, API code, UI components
-- Eventually hits context limits and loses coherence
-
-**Parallel agent approach:**
-- Main thread stays clean and strategic
-- Each agent handles its own context in isolation
-- Implementation details never pollute the main conversation
-- Main thread maintains oversight without drowning in code
-
-Your main conversation becomes the conductor, not the orchestra.
-
-### GitHub vs Local: Perfect Separation
-
-**What GitHub Sees:**
-- Clean, simple issues
-- Progress updates
-- Completion status
-
-**What Actually Happens Locally:**
-- Issue #1234 explodes into 5 parallel agents
-- Agents coordinate through Git commits
-- Complex orchestration hidden from view
-
-GitHub doesn't need to know HOW the work got done – just that it IS done.
-
-### The Command Flow
-
-```bash
-# Analyze what can be parallelized
-/pm:issue-analyze 1234
-
-# Launch the swarm
-/pm:epic-start memory-system
-
-# Watch the magic
-# 12 agents working across 3 issues
-# All in: ../epic-memory-system/
-
-# One clean merge when done
-/pm:epic-merge memory-system
-```
-
-## Key Features & Benefits
-
-### 🧠 **Context Preservation**
-Never lose project state again. Each epic maintains its own context, agents read from `.claude/context/`, and updates locally before syncing.
-
-### ⚡ **Parallel Execution**
-Ship faster with multiple agents working simultaneously. Tasks marked `parallel: true` enable conflict-free concurrent development.
-
-### 🔗 **GitHub Native**
-Works with tools your team already uses. Issues are the source of truth, comments provide history, and there is no dependency on the Projects API.
-
-### 🤖 **Agent Specialization**
-Right tool for every job. Different agents for UI, API, and database work. Each reads requirements and posts updates automatically.
-
-### 📊 **Full Traceability**
-Every decision is documented. PRD → Epic → Task → Issue → Code → Commit. Complete audit trail from idea to production.
-
-### 🚀 **Developer Productivity**
-Focus on building, not managing. Intelligent prioritization, automatic context loading, and incremental sync when ready.
-
-## Proven Results
-
-Teams using this system report:
-- **89% less time** lost to context switching – you'll use `/compact` and `/clear` a LOT less
-- **5-8 parallel tasks** vs 1 previously – editing/testing multiple files at the same time
-- **75% reduction** in bug rates – due to the breaking down features into detailed tasks 
-- **Up to 3x faster** feature delivery – based on feature size and complexity
-
-## Example Flow
-
-```bash
-# Start a new feature
-/pm:prd-new memory-system
-
-# Review and refine the PRD...
-
-# Create implementation plan
-/pm:prd-parse memory-system
-
-# Review the epic...
-
-# Break into tasks and push to GitHub
-/pm:epic-oneshot memory-system
-# Creates issues: #1234 (epic), #1235, #1236 (tasks)
-
-# Start development on a task
-/pm:issue-start 1235
-# Agent begins work, maintains local progress
-
-# Sync progress to GitHub
-/pm:issue-sync 1235
-# Updates posted as issue comments
-
-# Check overall status
-/pm:epic-show memory-system
-```
-
-## Get Started Now
-
-### Quick Setup (2 minutes)
-
-1. **Clone this repository into your project**:
+2. Set environment variables or use the config command:
    ```bash
-   cd path/to/your/project/
-   git clone https://github.com/automazeio/ccpm.git .
-   ```
-   > ⚠️ **IMPORTANT**: If you already have a `.claude` directory, clone this repository to a different directory and copy the contents of the cloned `.claude` directory to your project's `.claude` directory.
-
-2. **Initialize the PM system**:
-   ```bash
-   /pm:init
-   ```
-   This command will:
-   - Install GitHub CLI (if needed)
-   - Authenticate with GitHub
-   - Install [gh-sub-issue extension](https://github.com/yahsan2/gh-sub-issue) for proper parent-child relationships
-   - Create required directories
-   - Update .gitignore
-
-3. **Create `CLAUDE.md`** with your repository information
-   ```bash
-   /init include rules from .claude/CLAUDE.md
-   ```
-   > If you already have a `CLAUDE.md` file, run: `/re-init` to update it with important rules from `.claude/CLAUDE.md`.
-
-4. **Prime the system**:
-   ```bash
-   /context:create
+   export SF_CLIENT_ID="your_client_id"
+   export SF_CLIENT_SECRET="your_client_secret"
+   export SF_USERNAME="integration_user@example.com"
+   export SF_LOGIN_URL="https://test.salesforce.com"
    ```
 
-
-
-### Start Your First Feature
+### Configuration Commands
 
 ```bash
-/pm:prd-new your-feature-name
+# Set configuration values
+npm start config set salesforce.clientId "your_client_id"
+npm start config set salesforce.clientSecret "your_client_secret"
+npm start config set salesforce.username "user@example.com"
+
+# View configuration
+npm start config get
+
+# List available presets
+npm start config presets list
+
+# Create a new preset
+npm start config presets create --name "my-preset" --description "My custom objects" --objects "Account,Contact,MyObject__c"
 ```
 
-Watch as structured planning transforms into shipped code.
+## Usage
 
-## Local vs Remote
+### 🌐 Web Interface (Recommended)
 
-| Operation | Local | GitHub |
-|-----------|-------|--------|
-| PRD Creation | ✅ | — |
-| Implementation Planning | ✅ | — |
-| Task Breakdown | ✅ | ✅ (sync) |
-| Execution | ✅ | — |
-| Status Updates | ✅ | ✅ (sync) |
-| Final Deliverables | — | ✅ |
+The web interface provides a modern, user-friendly experience with guided workflows:
 
-## Technical Notes
+```bash
+cd web
+npm install
+npm run dev
+```
 
-### GitHub Integration
-- Uses **gh-sub-issue extension** for proper parent-child relationships
-- Falls back to task lists if extension not installed
-- Epic issues track sub-task completion automatically
-- Labels provide additional organization (`epic:feature`, `task:feature`)
+Then open http://localhost:3000 in your browser.
 
-### File Naming Convention
-- Tasks start as `001.md`, `002.md` during decomposition
-- After GitHub sync, renamed to `{issue-id}.md` (e.g., `1234.md`)
-- Makes it easy to navigate: issue #1234 = file `1234.md`
+**Web Interface Workflow:**
+1. **Authentication**: Enter your External Client App credentials
+2. **Discovery**: Automatic Salesforce org discovery with real-time progress
+3. **Selection**: Visual object selection with business context categories  
+4. **Field Analysis**: Detailed field analysis for selected objects
+5. **Configuration**: Record count configuration with storage validation
+6. **Preview**: Sample data preview before generation
+7. **Execution**: Real-time data generation and loading with progress tracking
+8. **Results**: Completion summary with detailed log file references
 
-### Design Decisions
-- Intentionally avoids GitHub Projects API complexity
-- All commands operate on local files first for speed
-- Synchronization with GitHub is explicit and controlled
-- Worktrees provide clean git isolation for parallel work
-- GitHub Projects can be added separately for visualization
+### 📋 CLI Interface (Advanced Users)
 
----
+The CLI provides scriptable access for automation and advanced use cases:
 
-## Support This Project
+### Discover Data Model
 
-Claude Code PM was developed at [Automaze](https://automaze.io) **for developers who ship, by developers who ship**.
+```bash
+# Discover all objects and fields
+npm start discover -u user@example.com -c client_id -s client_secret
 
-If Claude Code PM helps your team ship better software:
+# Save discovery results to file
+npm start discover --output data-model.json
 
-- ⭐ **[Star this repository](https://github.com/your-username/claude-code-pm)** to show your support
-- 🐦 **[Follow @aroussi on X](https://x.com/aroussi)** for updates and tips
+# Discover objects only (skip field analysis)
+npm start discover --objects-only
+```
 
+### Seed Data
 
----
+```bash
+# Interactive mode - guided object selection
+npm start seed --interactive
 
-> [!TIP]
-> **Ship faster with Automaze.** We partner with founders to bring their vision to life, scale their business, and optimize for success.
-> **[Visit Automaze to book a call with me ›](https://automaze.io)**
+# Seed specific objects
+npm start seed --objects "Account,Contact,Lead" --records 50
+
+# Use a preset
+npm start seed --preset sales-cloud --records 100
+
+# Dry run - show what would be generated
+npm start seed --objects "Account,Contact" --dry-run
+```
+
+### Example Workflows
+
+#### Basic Setup
+```bash
+# 1. Configure credentials
+npm start config set salesforce.clientId "your_client_id"
+npm start config set salesforce.clientSecret "your_client_secret"
+npm start config set salesforce.username "user@sandbox.example.com"
+
+# 2. Discover the data model
+npm start discover --output my-sandbox-model.json
+
+# 3. Seed data interactively
+npm start seed --interactive
+```
+
+#### Storage-Aware Generation
+```bash
+# Let the tool automatically calculate safe record counts
+npm start seed --preset core-objects
+
+# Force exact counts (bypasses storage calculations)
+npm start seed --objects "Account,Contact" --records 10
+
+# Check what would be generated without loading
+npm start seed --preset sales-cloud --dry-run
+```
+
+#### Business Data Generation
+```bash
+# Generate business accounts with linked contacts
+npm start seed --objects "Account,Contact" --records 50
+
+# Load with proper dependencies and relationships
+npm start seed --preset core-objects
+
+# Review generated data and relationships in logs/
+ls logs/load_*.json
+```
+
+## Presets
+
+The tool includes several built-in presets for common scenarios:
+
+- **core-objects**: Essential business objects with proper load order
+  - Account, Contact, Lead, Product2, Pricebook2, PricebookEntry, Opportunity, Case, Task
+- **sales-cloud**: Complete sales cloud data model
+  - Account, Contact, Lead, Opportunity, Case, Campaign, Task, Event  
+- **custom-only**: All custom objects (ending with __c)
+- **minimal**: Basic objects for simple testing (Account, Contact, Lead)
+- **relationship-aware**: Objects optimized for relationship testing
+
+## Storage-Aware Data Generation
+
+The tool intelligently calculates safe record counts based on actual storage availability:
+
+### Storage Calculation Logic
+- **Detects current storage usage** from Salesforce org limits
+- **Applies 80% safety threshold** to prevent storage issues
+- **Calculates max records** based on 2KB per record estimate
+- **Distributes records proportionally** across selected objects using smart ratios
+
+### Sandbox Type Adjustments
+- **Developer (15MB)**: Typically 6,000+ records total with 80% threshold
+- **Developer Pro (1GB)**: Typically 400,000+ records total  
+- **Partial Copy (5GB)**: Typically 2,000,000+ records total
+- **Full**: Production storage limits apply
+
+### Example for Developer Sandbox
+```
+Available Storage: 10MB remaining
+80% Safe Limit: 8MB
+Max Safe Records: 4,096 records
+Distribution: Account(400), Contact(1,000), Lead(600)...
+```
+
+## Data Generation
+
+### Enhanced Object Discovery
+- **Smart Filtering**: Automatically excludes 780+ metadata and system objects (ApexClass, StaticResource, etc.)
+- **Data-Only Focus**: Only discovers objects that can hold business records
+- **Performance Optimized**: Faster discovery by processing only relevant objects
+- **Business Context**: Prioritizes core business objects (Account, Contact, Lead, Opportunity, etc.)
+
+### Business-Realistic Data with Faker.js
+- **Contact Names**: Realistic first/last names using `faker.person.firstName()` and `faker.person.lastName()`
+- **Account Names**: Proper business names using `faker.company.name()` (e.g., "Mitchell LLC", "Hills Inc")
+- **Communication Data**: 
+  - Emails: `faker.internet.email()` (naturally unique)
+  - Phone/Fax: `faker.phone.number()` (realistic formats)
+  - URLs: `faker.internet.url()`
+- **Address & Geographic**:
+  - Streets: `faker.location.streetAddress()`
+  - Cities: `faker.location.city()`  
+  - States: `faker.location.state({ abbreviated: true })`
+  - Postal codes: `faker.location.zipCode()`
+  - Countries: `faker.location.country()`
+- **Business Context**:
+  - Job titles: `faker.person.jobTitle()`
+  - Departments: Realistic department names
+  - Industries: Business industry categories
+  - Product names: `faker.commerce.productName()`
+- **Smart Relationships**: Automatically link Contacts to created Accounts with real Salesforce IDs
+- **RecordType Intelligence**: Include RecordTypeId only when multiple record types exist
+
+### Advanced Relationship Handling
+- **Dependency-Aware Loading**: Objects loaded in correct order (Account → Contact → Opportunity)
+- **Real Salesforce IDs**: Relationships use actual inserted record IDs, not fake references
+- **Circular Reference Handling**: Skip optional self-references (ParentId, ReportsToId)
+- **System Field Exclusion**: Automatically skip OwnerId, CreatedById, and other system fields
+
+### Data Quality Features
+- **Field Type Mapping**: Salesforce field types to appropriate Faker.js generators
+- **Constraint Respect**: Field length, required, picklist values, etc.
+- **Address Coordination**: Realistic address component generation
+- **Referential Integrity**: Maintain data consistency across related objects
+
+## Comprehensive Logging & Monitoring
+
+### Unified Logging (CLI & Web Interface)
+Both CLI and Web Interface create identical detailed log files in the `logs/` directory with:
+- **Generated Data**: Complete payload for each object before insertion
+- **Success/Failure Results**: Detailed record-by-record success tracking with Salesforce IDs
+- **Error Analysis**: Complete error messages and failure analysis
+- **Performance Metrics**: Timing per object and overall session duration
+- **Storage Impact**: Estimated storage usage and remaining capacity
+
+### Log File Structure
+```json
+{
+  "sessionInfo": {
+    "sessionId": "load_2025-08-03_09-33-07-098Z_i4z2gm",
+    "startTime": "2025-08-03T09:33:07.098Z",
+    "duration": "2513ms"
+  },
+  "summary": {
+    "successRate": 100,
+    "totalRecordsCreated": 42,
+    "objectsWithErrors": [],
+    "mostCommonErrors": []
+  },
+  "objectResults": [
+    {
+      "objectName": "Account",
+      "generatedData": [...],
+      "results": {
+        "successful": [...],
+        "failed": [...]
+      }
+    }
+  ]
+}
+```
+
+## Safety Features
+
+- **Sandbox-only**: Refuses to connect to production orgs  
+- **80% Storage Threshold**: Prevents storage limit issues
+- **Smart Field Validation**: Respects field constraints and relationships with ~99% success rate
+- **Required Field Detection**: Advanced logic handles metadata inconsistencies for critical fields
+- **Comprehensive Error Handling**: Detailed error reporting with recovery suggestions
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
+
+## License
+
+MIT License - see LICENSE file for details

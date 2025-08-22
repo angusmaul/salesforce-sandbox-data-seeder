@@ -1,0 +1,13 @@
+{
+  "name": "custom-only",
+  "description": "Only custom objects in the org",
+  "includePatterns": [
+    "*__c"
+  ],
+  "excludePatterns": [
+    "*History",
+    "*Share",
+    "*Feed",
+    "*Tag"
+  ]
+}

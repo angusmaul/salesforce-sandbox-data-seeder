@@ -1,0 +1,9 @@
+{
+  "name": "minimal",
+  "description": "Minimal set of objects for basic testing",
+  "includedObjects": [
+    "Account",
+    "Contact",
+    "Lead"
+  ]
+}
