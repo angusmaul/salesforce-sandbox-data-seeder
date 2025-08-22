@@ -100,6 +100,357 @@
   .status-info {
     @apply status-indicator bg-primary-100 text-primary-800;
   }
+
+  /* AI Chat Interface Styles */
+  .chat-interface {
+    @apply flex flex-col h-full bg-white;
+  }
+  
+  .chat-interface.collapsed .chat-messages,
+  .chat-interface.collapsed .chat-input-container {
+    @apply hidden;
+  }
+  
+  .chat-header {
+    @apply flex-shrink-0 p-4 border-b border-gray-200 bg-gray-50;
+  }
+  
+  .chat-title {
+    @apply flex items-center justify-between;
+  }
+  
+  .title-content {
+    @apply flex items-center space-x-2;
+  }
+  
+  .chat-icon {
+    @apply text-lg;
+  }
+  
+  .title-text {
+    @apply text-sm font-medium text-gray-900;
+  }
+  
+  .connection-indicator {
+    @apply w-2 h-2 rounded-full;
+  }
+  
+  .header-actions {
+    @apply flex items-center space-x-1;
+  }
+  
+  .header-button {
+    @apply p-1 text-gray-400 hover:text-gray-600 transition-colors rounded;
+  }
+  
+  .collapse-toggle {
+    @apply text-gray-500 hover:text-gray-700;
+  }
+  
+  .chat-error {
+    @apply mt-2 p-2 bg-red-50 border border-red-200 rounded-md flex items-center space-x-2;
+  }
+  
+  .error-icon {
+    @apply text-red-400;
+  }
+  
+  .error-message {
+    @apply text-sm text-red-800;
+  }
+  
+  .chat-messages {
+    @apply flex-1 overflow-y-auto p-4;
+  }
+  
+  .empty-state {
+    @apply text-center py-8 px-4 text-gray-500;
+  }
+  
+  .empty-icon {
+    @apply text-4xl mb-4;
+  }
+  
+  .empty-state h3 {
+    @apply text-lg font-medium text-gray-900 mb-2;
+  }
+  
+  .empty-state p {
+    @apply text-sm text-gray-600 mb-4;
+  }
+  
+  .suggested-questions {
+    @apply text-left;
+  }
+  
+  .suggested-questions p {
+    @apply font-medium mb-2;
+  }
+  
+  .suggested-questions ul {
+    @apply text-xs space-y-1;
+  }
+  
+  .suggested-questions li {
+    @apply list-none pl-0 text-gray-500 italic;
+  }
+  
+  .messages-list {
+    @apply space-y-4;
+  }
+  
+  .typing-indicator {
+    @apply flex items-start space-x-3 opacity-75;
+  }
+  
+  .typing-avatar {
+    @apply text-lg;
+  }
+  
+  .typing-content {
+    @apply flex flex-col;
+  }
+  
+  .typing-text {
+    @apply text-sm text-gray-500 font-medium;
+  }
+  
+  .typing-dots {
+    @apply flex space-x-1 mt-1;
+  }
+  
+  .typing-dots span {
+    @apply w-2 h-2 bg-gray-400 rounded-full animate-pulse;
+  }
+  
+  .typing-dots span:nth-child(2) {
+    @apply animation-delay-150;
+  }
+  
+  .typing-dots span:nth-child(3) {
+    @apply animation-delay-300;
+  }
+  
+  .chat-input-container {
+    @apply flex-shrink-0 p-4 border-t border-gray-200 bg-white;
+  }
+  
+  .chat-form {
+    @apply w-full;
+  }
+  
+  .input-wrapper {
+    @apply flex items-end space-x-3;
+  }
+  
+  .chat-input {
+    @apply flex-1 resize-none border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all;
+  }
+  
+  .send-button {
+    @apply flex-shrink-0 w-10 h-10 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center;
+  }
+  
+  .loading-spinner {
+    @apply animate-spin text-white;
+  }
+  
+  .send-icon {
+    @apply text-white;
+  }
+  
+  .input-footer {
+    @apply flex items-center justify-between mt-2;
+  }
+  
+  .input-hint {
+    @apply text-xs text-gray-500;
+  }
+  
+  .input-hint kbd {
+    @apply px-1 py-0.5 bg-gray-100 border border-gray-300 rounded text-xs font-mono;
+  }
+  
+  .context-indicator {
+    @apply text-xs text-gray-500 capitalize;
+  }
+  
+  /* Message Bubble Styles */
+  .message-bubble {
+    @apply flex flex-col space-y-2;
+  }
+  
+  .message-bubble.user {
+    @apply items-end;
+  }
+  
+  .message-bubble.assistant {
+    @apply items-start;
+  }
+  
+  .message-bubble.error .message-content {
+    @apply border-red-200 bg-red-50;
+  }
+  
+  .message-header {
+    @apply flex items-center space-x-2 text-xs text-gray-500;
+  }
+  
+  .message-avatar {
+    @apply flex-shrink-0;
+  }
+  
+  .user-avatar, .ai-avatar {
+    @apply w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-sm;
+  }
+  
+  .user-avatar {
+    @apply bg-blue-100;
+  }
+  
+  .ai-avatar {
+    @apply bg-green-100;
+  }
+  
+  .message-meta {
+    @apply flex items-center space-x-2;
+  }
+  
+  .message-role {
+    @apply font-medium;
+  }
+  
+  .message-timestamp {
+    @apply text-gray-400;
+  }
+  
+  .streaming-indicator {
+    @apply flex items-center space-x-1;
+  }
+  
+  .streaming-dot {
+    @apply w-1 h-1 bg-blue-500 rounded-full animate-pulse;
+  }
+  
+  .message-content {
+    @apply max-w-xs lg:max-w-md p-3 rounded-lg border;
+  }
+  
+  .message-bubble.user .message-content {
+    @apply bg-blue-600 text-white border-blue-600;
+  }
+  
+  .message-bubble.assistant .message-content {
+    @apply bg-gray-100 text-gray-900 border-gray-200;
+  }
+  
+  .message-text {
+    @apply text-sm leading-relaxed;
+  }
+  
+  .message-text strong {
+    @apply font-semibold;
+  }
+  
+  .message-text em {
+    @apply italic;
+  }
+  
+  .message-text .inline-code {
+    @apply px-1 py-0.5 bg-gray-200 text-gray-800 rounded text-xs font-mono;
+  }
+  
+  .message-text .code-block {
+    @apply mt-2 p-3 bg-gray-800 text-gray-100 rounded text-xs font-mono overflow-x-auto;
+  }
+  
+  .message-error {
+    @apply mt-2 p-2 bg-red-50 border border-red-200 rounded-md;
+  }
+  
+  .error-content {
+    @apply flex items-center justify-between;
+  }
+  
+  .error-text {
+    @apply text-sm text-red-800 flex-1;
+  }
+  
+  .retry-button {
+    @apply text-xs bg-red-100 text-red-700 px-2 py-1 rounded hover:bg-red-200 transition-colors;
+  }
+  
+  .message-suggestions {
+    @apply mt-2 p-2 bg-blue-50 border border-blue-200 rounded-md;
+  }
+  
+  .suggestions-header {
+    @apply text-sm font-medium text-blue-800 mb-1;
+  }
+  
+  .suggestions-list {
+    @apply text-xs text-blue-700 space-y-1;
+  }
+  
+  .suggestion-item {
+    @apply list-none pl-0;
+  }
+  
+  .message-actions {
+    @apply mt-2 p-2 bg-gray-50 border border-gray-200 rounded-md;
+  }
+  
+  .actions-header {
+    @apply text-sm font-medium text-gray-800 mb-2;
+  }
+  
+  .actions-list {
+    @apply flex flex-wrap gap-1;
+  }
+  
+  .action-button {
+    @apply text-xs px-2 py-1 rounded border transition-colors;
+  }
+  
+  .action-navigate {
+    @apply bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-200;
+  }
+  
+  .action-configure {
+    @apply bg-green-100 text-green-700 border-green-200 hover:bg-green-200;
+  }
+  
+  .action-retry {
+    @apply bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-200;
+  }
+  
+  .action-explain {
+    @apply bg-purple-100 text-purple-700 border-purple-200 hover:bg-purple-200;
+  }
+  
+  .message-footer {
+    @apply mt-2;
+  }
+  
+  .expand-toggle {
+    @apply text-xs text-gray-500 hover:text-gray-700 transition-colors;
+  }
+  
+  .message-metadata {
+    @apply mt-2 p-2 bg-gray-50 border border-gray-200 rounded text-xs text-gray-600;
+  }
+  
+  .metadata-item {
+    @apply flex justify-between py-1;
+  }
+  
+  .metadata-label {
+    @apply font-medium;
+  }
+  
+  .metadata-value {
+    @apply text-gray-500 font-mono;
+  }
 }
 
 @layer utilities {

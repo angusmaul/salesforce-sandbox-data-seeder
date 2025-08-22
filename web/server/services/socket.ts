@@ -1,5 +1,5 @@
 import { Server as SocketIOServer } from 'socket.io';
-import { ProgressUpdate, WizardStep } from '../../shared/types/api';
+import { ProgressUpdate, WizardStep, StreamingChatResponse, ChatMessage } from '../../shared/types/api';
 
 export class SocketService {
   private io: SocketIOServer;
@@ -139,6 +139,55 @@ export class SocketService {
     });
   }
   
+  /**
+   * Send streaming chat message chunk
+   */
+  sendChatMessageChunk(sessionId: string, response: StreamingChatResponse): void {
+    this.io.to(sessionId).emit('chat-message-chunk', response);
+  }
+  
+  /**
+   * Send complete chat message
+   */
+  sendChatMessage(sessionId: string, message: ChatMessage): void {
+    this.io.to(sessionId).emit('chat-message', message);
+  }
+  
+  /**
+   * Send typing indicator for AI assistant
+   */
+  sendTypingIndicator(sessionId: string, isTyping: boolean): void {
+    this.io.to(sessionId).emit('ai-typing', { 
+      sessionId, 
+      isTyping,
+      timestamp: new Date().toISOString()
+    });
+  }
+  
+  /**
+   * Send chat error
+   */
+  sendChatError(sessionId: string, messageId: string, error: string): void {
+    this.io.to(sessionId).emit('chat-error', {
+      sessionId,
+      messageId,
+      error,
+      timestamp: new Date().toISOString()
+    });
+  }
+  
+  /**
+   * Notify about chat session status
+   */
+  sendChatSessionUpdate(sessionId: string, status: 'connected' | 'disconnected' | 'error', message?: string): void {
+    this.io.to(sessionId).emit('chat-session-status', {
+      sessionId,
+      status,
+      message,
+      timestamp: new Date().toISOString()
+    });
+  }
+
   /**
    * Get connection stats
    */

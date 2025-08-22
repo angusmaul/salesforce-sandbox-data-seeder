@@ -115,6 +115,59 @@ export interface ClaudeAction {
   data?: any;
 }
 
+// Chat interface types
+export interface ChatMessage {
+  id: string;
+  sessionId: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+  isStreaming?: boolean;
+  metadata?: {
+    tokens?: number;
+    responseTime?: number;
+    error?: string;
+    suggestions?: string[];
+    actions?: ClaudeAction[];
+  };
+}
+
+export interface ChatSession {
+  sessionId: string;
+  messages: ChatMessage[];
+  isTyping?: boolean;
+  lastActivity: Date;
+  context?: {
+    step: WizardStep;
+    sessionData?: Partial<WizardSession>;
+  };
+}
+
+export interface StreamingChatRequest {
+  sessionId: string;
+  message: string;
+  context?: {
+    step: WizardStep;
+    sessionData?: Partial<WizardSession>;
+    error?: string;
+  };
+}
+
+export interface StreamingChatResponse {
+  messageId: string;
+  sessionId: string;
+  content: string;
+  isComplete: boolean;
+  timestamp: string;
+  metadata?: {
+    tokens?: number;
+    responseTime?: number;
+    error?: string;
+    suggestions?: string[];
+    actions?: ClaudeAction[];
+  };
+}
+
 // AI Service Types
 export interface AIServiceStatus {
   status: 'healthy' | 'degraded' | 'unhealthy' | 'unavailable';

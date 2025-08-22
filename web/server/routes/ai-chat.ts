@@ -1,7 +1,8 @@
 import express from 'express';
 import rateLimit from 'express-rate-limit';
+import { v4 as uuidv4 } from 'uuid';
 import { AIService, AIServiceConfig } from '../services/ai-service';
-import { APIResponse, ClaudeRequest, ClaudeResponse } from '../../shared/types/api';
+import { APIResponse, ClaudeRequest, ClaudeResponse, StreamingChatRequest, StreamingChatResponse, ChatMessage } from '../../shared/types/api';
 
 const router = express.Router();
 
@@ -404,6 +405,175 @@ router.post('/stats/reset', requireAIService, (req, res) => {
       error: error instanceof Error ? error.message : 'Failed to reset usage statistics',
       timestamp: new Date().toISOString()
     });
+  }
+});
+
+/**
+ * Streaming chat endpoint with real-time WebSocket responses
+ */
+router.post('/stream/:sessionId', aiRateLimit, requireAIService, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { message, context }: StreamingChatRequest = req.body;
+    
+    // Validate session
+    const session = req.sessionManager.getSession(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Validate input
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'Message is required and must be a string',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Get socket service from request (should be attached by middleware)
+    const socketService = req.socketService;
+    if (!socketService) {
+      return res.status(500).json({
+        success: false,
+        error: 'Socket service not available',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const messageId = uuidv4();
+    const startTime = Date.now();
+    
+    // Send typing indicator
+    socketService.sendTypingIndicator(sessionId, true);
+    
+    // Respond immediately that streaming has started
+    res.json({
+      success: true,
+      data: {
+        messageId,
+        sessionId,
+        streaming: true,
+        message: 'Streaming response started'
+      },
+      timestamp: new Date().toISOString()
+    });
+
+    try {
+      // Build enhanced context
+      const enhancedContext = {
+        session: {
+          id: session.id,
+          currentStep: session.currentStep,
+          discoveredObjectsCount: session.discoveredObjects?.length || 0,
+          selectedObjectsCount: session.selectedObjects?.length || 0,
+          connectionInfo: session.connectionInfo ? {
+            instanceUrl: session.connectionInfo.instanceUrl,
+            organizationName: session.connectionInfo.organizationName,
+            isSandbox: session.connectionInfo.isSandbox
+          } : null
+        },
+        user: context || {}
+      };
+
+      // Get AI response
+      const response = await aiService!.chat(message, enhancedContext);
+      const responseTime = Date.now() - startTime;
+      
+      // Parse response for structured data
+      const parsedResponse = parseAIResponse(response, context);
+      
+      // Simulate streaming by breaking response into chunks
+      const words = response.split(' ');
+      const chunkSize = Math.max(1, Math.floor(words.length / 10)); // 10 chunks
+      let accumulatedContent = '';
+      
+      for (let i = 0; i < words.length; i += chunkSize) {
+        const chunk = words.slice(i, i + chunkSize).join(' ');
+        accumulatedContent += (i > 0 ? ' ' : '') + chunk;
+        
+        const isComplete = i + chunkSize >= words.length;
+        
+        const streamingResponse: StreamingChatResponse = {
+          messageId,
+          sessionId,
+          content: accumulatedContent,
+          isComplete,
+          timestamp: new Date().toISOString(),
+          metadata: isComplete ? {
+            tokens: Math.ceil(response.length / 4), // Rough token estimate
+            responseTime,
+            suggestions: parsedResponse.suggestions,
+            actions: parsedResponse.actions
+          } : undefined
+        };
+        
+        socketService.sendChatMessageChunk(sessionId, streamingResponse);
+        
+        // Add small delay between chunks for realistic streaming effect
+        if (!isComplete) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+      
+      // Send final message for persistence
+      const finalMessage: ChatMessage = {
+        id: messageId,
+        sessionId,
+        role: 'assistant',
+        content: response,
+        timestamp: new Date(),
+        metadata: {
+          tokens: Math.ceil(response.length / 4),
+          responseTime,
+          suggestions: parsedResponse.suggestions,
+          actions: parsedResponse.actions
+        }
+      };
+      
+      socketService.sendChatMessage(sessionId, finalMessage);
+      
+    } catch (error) {
+      console.error('Streaming chat error:', error);
+      
+      const errorMessage = error instanceof Error ? error.message : 'Failed to process chat request';
+      
+      // Send error through socket
+      socketService.sendChatError(sessionId, messageId, errorMessage);
+      
+      // Send error message as final response
+      const errorChatMessage: ChatMessage = {
+        id: messageId,
+        sessionId,
+        role: 'assistant',
+        content: `I apologize, but I encountered an error: ${errorMessage}`,
+        timestamp: new Date(),
+        metadata: {
+          error: errorMessage,
+          responseTime: Date.now() - startTime
+        }
+      };
+      
+      socketService.sendChatMessage(sessionId, errorChatMessage);
+    } finally {
+      // Always stop typing indicator
+      socketService.sendTypingIndicator(sessionId, false);
+    }
+    
+  } catch (error) {
+    console.error('Streaming chat setup error:', error);
+    
+    const response: APIResponse = {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to setup streaming chat',
+      timestamp: new Date().toISOString()
+    };
+    
+    res.status(500).json(response);
   }
 });
 

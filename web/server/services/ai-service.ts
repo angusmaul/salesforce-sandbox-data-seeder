@@ -670,7 +670,7 @@ Provide accurate, actionable advice focused on successful data generation.`;
     this.backgroundIntervals.push(interval);
   }
 
-  private async processQueue(): void {
+  private async processQueue(): Promise<void> {
     if (this.isProcessingQueue || this.requestQueue.length === 0) return;
 
     this.isProcessingQueue = true;
