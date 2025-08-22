@@ -1,3 +1,6 @@
+// Load environment variables FIRST before any other imports
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -112,6 +115,16 @@ let aiService = null;
 let validationEngine = null;
 let enhancedDiscovery = null;
 
+// Initialize AI Service for chat functionality (independent of validation engine)
+try {
+  // Use the JavaScript AI service from server/services/ai-service.js for chat
+  const AIServiceJS = require('./services/ai-service');
+  aiService = new AIServiceJS();
+  console.log('✅ AI Service initialized for chat functionality');
+} catch (error) {
+  console.error('❌ Failed to initialize AI Service for chat:', error.message);
+}
+
 function initializeValidationEngine() {
   if (!ValidationEngine || !AIService || !EnhancedDiscoveryService) {
     console.log('⚠️ Validation Engine features disabled - modules not available');
@@ -119,21 +132,6 @@ function initializeValidationEngine() {
   }
 
   try {
-    // Initialize AI service if Claude API key is available
-    const claudeApiKey = process.env.CLAUDE_API_KEY;
-    if (claudeApiKey) {
-      aiService = new AIService({
-        apiKey: claudeApiKey,
-        model: 'claude-3-sonnet-20240229',
-        maxTokens: 1000,
-        temperature: 0.7,
-        usageTrackingEnabled: true
-      });
-      console.log('✅ AI Service initialized with Claude API');
-    } else {
-      console.log('⚠️ Claude API key not found - AI features will be disabled');
-    }
-
     // Initialize enhanced discovery service with mock Salesforce service for now
     // This will be properly integrated when connected to Salesforce
     
@@ -4255,6 +4253,150 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log(`Client disconnected: ${socket.id}`);
   });
+});
+
+// Simple rate limiting for AI chat
+const chatRateLimit = new Map();
+
+// AI Chat API Endpoints
+app.post('/api/ai-chat/stream/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { message, context } = req.body;
+    
+    // Check if we're in demo mode - if so, bypass rate limiting
+    const DEMO_MODE = process.env.AI_DEMO_MODE === 'true';
+    
+    if (!DEMO_MODE) {
+      // Conservative rate limiting for new API keys - 1 request per 60 seconds per session
+      const now = Date.now();
+      const lastRequest = chatRateLimit.get(sessionId);
+      if (lastRequest && (now - lastRequest) < 60000) {
+        const waitTime = Math.ceil((60000 - (now - lastRequest)) / 1000);
+        return res.status(429).json({
+          success: false,
+          error: `Please wait ${waitTime} seconds between AI chat messages. New API keys have conservative rate limits that improve with usage.`,
+          retryAfter: waitTime
+        });
+      }
+      chatRateLimit.set(sessionId, now);
+    }
+    
+    // Load AI service if available
+    let aiService = null;
+    try {
+      const AIService = require('./services/ai-service');
+      aiService = new AIService();
+    } catch (error) {
+      console.log('AI Service not available:', error.message);
+    }
+    
+    if (!aiService || !aiService.initialized) {
+      return res.status(503).json({
+        success: false,
+        error: 'AI service not available. Please configure ANTHROPIC_API_KEY.'
+      });
+    }
+    
+    // Get session for context
+    const session = sessions.get(sessionId);
+    const currentStep = session?.currentStep || 'unknown';
+    
+    // Create context-aware prompt
+    const contextPrompt = `You are an AI assistant helping with Salesforce Sandbox Data Seeder.
+Current wizard step: ${currentStep}
+Session context: ${JSON.stringify(context || {})}
+User message: ${message}
+
+Provide helpful guidance for data generation, validation rules, and Salesforce best practices.`;
+    
+    // Get AI response
+    const response = await aiService.chat(contextPrompt, sessionId);
+    
+    if (response.success) {
+      // Send response via WebSocket room (all clients in this session)
+      io.to(sessionId).emit('chat-message', {
+        id: require('uuid').v4(),
+        sessionId: sessionId,
+        content: response.response,
+        role: 'assistant',
+        timestamp: new Date().toISOString(),
+        metadata: {
+          tokens: response.usage,
+          responseTime: response.responseTime
+        }
+      });
+      
+      res.json({
+        success: true,
+        message: response.response,
+        metadata: {
+          tokens: response.usage,
+          responseTime: response.responseTime
+        }
+      });
+    } else {
+      // For rate limit and other AI service errors, send the user-friendly message
+      const statusCode = response.error === 'rate_limit' ? 429 : 500;
+      res.status(statusCode).json({
+        success: false,
+        error: response.response || response.error || 'Failed to get AI response',
+        retryAfter: response.retryAfter
+      });
+    }
+  } catch (error) {
+    console.error('AI chat error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// AI Health Check
+app.get('/api/ai/health', async (req, res) => {
+  try {
+    let aiService = null;
+    try {
+      const AIService = require('./services/ai-service');
+      aiService = new AIService();
+    } catch (error) {
+      return res.json({
+        status: 'unavailable',
+        error: 'AI service module not loaded'
+      });
+    }
+    
+    const health = await aiService.getHealthStatus();
+    res.json(health);
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      error: error.message
+    });
+  }
+});
+
+// AI Usage Stats
+app.get('/api/ai/stats', async (req, res) => {
+  try {
+    let aiService = null;
+    try {
+      const AIService = require('./services/ai-service');
+      aiService = new AIService();
+    } catch (error) {
+      return res.json({
+        error: 'AI service not available'
+      });
+    }
+    
+    const stats = await aiService.getUsageStats();
+    res.json(stats);
+  } catch (error) {
+    res.status(500).json({
+      error: error.message
+    });
+  }
 });
 
 // Error handling

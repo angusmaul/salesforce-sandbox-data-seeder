@@ -224,11 +224,11 @@
   }
   
   .typing-dots span:nth-child(2) {
-    @apply animation-delay-150;
+    animation-delay: 150ms;
   }
   
   .typing-dots span:nth-child(3) {
-    @apply animation-delay-300;
+    animation-delay: 300ms;
   }
   
   .chat-input-container {

@@ -255,7 +255,29 @@ export function useAIChat({
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to send message');
+        // Handle different error formats
+        let errorMessage = 'Failed to send message';
+        
+        if (response.status === 429) {
+          // Rate limit error
+          errorMessage = errorData.error || 'Please wait before sending another message (rate limit)';
+          if (errorData.retryAfter) {
+            errorMessage += ` Try again in ${errorData.retryAfter} seconds.`;
+          }
+        } else if (errorData.error) {
+          errorMessage = errorData.error;
+        } else if (errorData.message) {
+          errorMessage = errorData.message;
+        }
+        
+        throw new Error(errorMessage);
+      }
+
+      // Check if response contains success: false
+      const responseData = await response.json();
+      if (responseData && responseData.success === false) {
+        const errorMsg = responseData.error || 'AI service returned an error';
+        throw new Error(errorMsg);
       }
 
       setTimeout(scrollToBottom, 100);
