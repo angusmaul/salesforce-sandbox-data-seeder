@@ -1,6 +1,7 @@
 import express from 'express';
 import { SalesforceService } from '../../../src/services/salesforce';
 import { ObjectDiscoveryService } from '../../../src/services/object-discovery';
+import { EnhancedDiscoveryService } from '../services/enhanced-discovery';
 import { APIResponse } from '../../shared/types/api';
 import { SalesforceObject } from '../../../src/models/salesforce';
 
@@ -326,5 +327,272 @@ function categorizeObjects(objects: SalesforceObject[]) {
   
   return categories;
 }
+
+/**
+ * Start enhanced discovery with validation rules
+ */
+router.post('/enhanced/start/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { 
+      includeValidationRules = true,
+      includeSchemaAnalysis = true,
+      anonymizeForAI = false,
+      cacheResults = true 
+    } = req.body;
+    
+    const session = req.sessionManager.getSession(sessionId);
+    if (!session || !session.connectionInfo) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found or not authenticated',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Update session step
+    req.sessionManager.updateSessionStep(sessionId, 'discovery');
+    
+    // Initialize Enhanced Discovery service
+    const salesforceService = new SalesforceService();
+    await salesforceService.setAccessToken(
+      session.connectionInfo.accessToken,
+      session.connectionInfo.instanceUrl
+    );
+    
+    const enhancedDiscoveryService = new EnhancedDiscoveryService(salesforceService);
+    
+    // Send initial progress
+    req.socketService.sendProgress(sessionId, 'discovery', 0, 'Starting enhanced object discovery with validation rules...');
+    
+    // Start enhanced discovery process
+    setImmediate(async () => {
+      try {
+        const objects = await enhancedDiscoveryService.discoverObjectsWithValidation({
+          includeValidationRules,
+          includeSchemaAnalysis,
+          anonymizeForAI,
+          cacheResults
+        });
+        
+        // Update session with enhanced discovered objects
+        req.sessionManager.updateSession(sessionId, {
+          discoveredObjects: objects,
+          enhancedDiscovery: true
+        });
+        
+        req.socketService.sendStepComplete(sessionId, 'discovery', {
+          totalObjects: objects.length,
+          customObjects: objects.filter(obj => obj.custom).length,
+          standardObjects: objects.filter(obj => !obj.custom).length,
+          objectsWithValidationRules: objects.filter(obj => obj.validationRules && obj.validationRules.length > 0).length,
+          totalValidationRules: objects.reduce((sum, obj) => sum + (obj.validationRules?.length || 0), 0)
+        });
+        
+      } catch (error) {
+        console.error('Enhanced discovery error:', error);
+        req.socketService.sendError(
+          sessionId,
+          error instanceof Error ? error.message : 'Enhanced discovery failed',
+          'discovery'
+        );
+      }
+    });
+    
+    const response: APIResponse = {
+      success: true,
+      data: { started: true, enhanced: true },
+      timestamp: new Date().toISOString()
+    };
+    
+    res.json(response);
+  } catch (error) {
+    const response: APIResponse = {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to start enhanced discovery',
+      timestamp: new Date().toISOString()
+    };
+    
+    res.status(500).json(response);
+  }
+});
+
+/**
+ * Get enhanced object details with validation rules
+ */
+router.get('/enhanced/object/:sessionId/:objectName', async (req, res) => {
+  try {
+    const { sessionId, objectName } = req.params;
+    const { 
+      includeValidationRules = true,
+      includeSchemaAnalysis = true,
+      anonymizeForAI = false 
+    } = req.query;
+    
+    const session = req.sessionManager.getSession(sessionId);
+    if (!session || !session.connectionInfo) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found or not authenticated',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Initialize Enhanced Discovery service
+    const salesforceService = new SalesforceService();
+    await salesforceService.setAccessToken(
+      session.connectionInfo.accessToken,
+      session.connectionInfo.instanceUrl
+    );
+    
+    const enhancedDiscoveryService = new EnhancedDiscoveryService(salesforceService);
+    const objectDetails = await enhancedDiscoveryService.getEnhancedObject(objectName, {
+      includeValidationRules: includeValidationRules === 'true',
+      includeSchemaAnalysis: includeSchemaAnalysis === 'true',
+      anonymizeForAI: anonymizeForAI === 'true'
+    });
+    
+    const response: APIResponse<SalesforceObject> = {
+      success: true,
+      data: objectDetails,
+      timestamp: new Date().toISOString()
+    };
+    
+    res.json(response);
+  } catch (error) {
+    const response: APIResponse = {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get enhanced object details',
+      timestamp: new Date().toISOString()
+    };
+    
+    res.status(500).json(response);
+  }
+});
+
+/**
+ * Create anonymized schema summary for AI analysis
+ */
+router.post('/enhanced/ai-summary/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { objectNames } = req.body;
+    
+    const session = req.sessionManager.getSession(sessionId);
+    if (!session || !session.discoveredObjects) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found or discovery not completed',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Filter objects if specific ones are requested
+    let objectsToSummarize = session.discoveredObjects;
+    if (objectNames && Array.isArray(objectNames)) {
+      objectsToSummarize = session.discoveredObjects.filter(obj => 
+        objectNames.includes(obj.name)
+      );
+    }
+    
+    // Initialize Enhanced Discovery service
+    const salesforceService = new SalesforceService();
+    await salesforceService.setAccessToken(
+      session.connectionInfo.accessToken,
+      session.connectionInfo.instanceUrl
+    );
+    
+    const enhancedDiscoveryService = new EnhancedDiscoveryService(salesforceService);
+    const { summary, anonymizationMap } = await enhancedDiscoveryService.createAISchemaSummary(objectsToSummarize);
+    
+    // Store anonymization map in session for reference
+    req.sessionManager.updateSession(sessionId, {
+      aiSchemaSummary: summary,
+      anonymizationMap: Object.fromEntries(anonymizationMap)
+    });
+    
+    const response: APIResponse = {
+      success: true,
+      data: summary,
+      timestamp: new Date().toISOString()
+    };
+    
+    res.json(response);
+  } catch (error) {
+    const response: APIResponse = {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to create AI schema summary',
+      timestamp: new Date().toISOString()
+    };
+    
+    res.status(500).json(response);
+  }
+});
+
+/**
+ * Get validation rules analysis for specific objects
+ */
+router.get('/enhanced/validation-analysis/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { objectNames } = req.query;
+    
+    const session = req.sessionManager.getSession(sessionId);
+    if (!session || !session.discoveredObjects) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found or discovery not completed',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    let objectsToAnalyze = session.discoveredObjects;
+    if (objectNames) {
+      const names = typeof objectNames === 'string' ? objectNames.split(',') : 
+                   Array.isArray(objectNames) ? objectNames.map(String) : [String(objectNames)];
+      objectsToAnalyze = session.discoveredObjects.filter(obj => 
+        names.includes(obj.name)
+      );
+    }
+    
+    // Extract validation analysis
+    const validationAnalysis = objectsToAnalyze.map(obj => ({
+      objectName: obj.name,
+      validationRuleCount: obj.validationRules?.length || 0,
+      schemaAnalysis: obj.schemaAnalysis ? {
+        complexityScore: obj.schemaAnalysis.complexityScore,
+        riskFactors: obj.schemaAnalysis.riskFactors,
+        recommendations: obj.schemaAnalysis.recommendations,
+        fieldDependencyCount: obj.schemaAnalysis.fieldDependencies.length,
+        constraintCount: obj.schemaAnalysis.fieldConstraints.length
+      } : null
+    }));
+    
+    const response: APIResponse = {
+      success: true,
+      data: {
+        totalObjectsAnalyzed: objectsToAnalyze.length,
+        objectsWithValidationRules: objectsToAnalyze.filter(obj => 
+          obj.validationRules && obj.validationRules.length > 0
+        ).length,
+        totalValidationRules: objectsToAnalyze.reduce((sum, obj) => 
+          sum + (obj.validationRules?.length || 0), 0
+        ),
+        analysis: validationAnalysis
+      },
+      timestamp: new Date().toISOString()
+    };
+    
+    res.json(response);
+  } catch (error) {
+    const response: APIResponse = {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get validation analysis',
+      timestamp: new Date().toISOString()
+    };
+    
+    res.status(500).json(response);
+  }
+});
 
 export default router;

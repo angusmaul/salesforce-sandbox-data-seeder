@@ -61,6 +61,8 @@ export interface SalesforceObject {
   recordTypeInfos?: RecordTypeInfo[];
   fields: SalesforceField[];
   childRelationships: ChildRelationship[];
+  validationRules?: ValidationRuleMetadata[];
+  schemaAnalysis?: SchemaAnalysis;
 }
 
 export interface RecordTypeInfo {
@@ -97,4 +99,51 @@ export interface SeedResult {
   recordsFailed: number;
   errors: string[];
   timeTaken: number;
+}
+
+// Enhanced discovery types for validation rules
+export interface ValidationRuleMetadata {
+  id: string;
+  fullName: string;
+  active: boolean;
+  description?: string;
+  errorConditionFormula: string;
+  errorMessage: string;
+  errorDisplayField?: string;
+  validationName: string;
+  fields?: string[]; // Fields referenced in the validation rule
+  dependencies?: FieldDependency[];
+  complexity: 'simple' | 'moderate' | 'complex';
+  riskLevel: 'low' | 'medium' | 'high';
+}
+
+export interface FieldConstraint {
+  field: string;
+  type: 'required' | 'unique' | 'format' | 'range' | 'lookup' | 'custom';
+  constraint: string;
+  validationRule?: string; // Reference to validation rule ID
+  errorMessage?: string;
+  severity: 'error' | 'warning';
+}
+
+export interface FieldDependency {
+  sourceField: string;
+  targetField: string;
+  type: 'required_if' | 'conditional' | 'lookup' | 'formula' | 'validation';
+  condition?: string;
+  operator?: string;
+  value?: any;
+}
+
+export interface SchemaAnalysis {
+  objectName: string;
+  validationRules: ValidationRuleMetadata[];
+  fieldConstraints: FieldConstraint[];
+  fieldDependencies: FieldDependency[];
+  requiredFieldPatterns: string[];
+  complexityScore: number;
+  riskFactors: string[];
+  recommendations: string[];
+  anonymized: boolean;
+  analysisTimestamp: Date;
 }

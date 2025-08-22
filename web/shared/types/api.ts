@@ -21,6 +21,11 @@ export interface WizardSession {
   generationPlan?: GenerationPlan[];
   executionResults?: SeedResult[];
   loadSessionId?: string;
+  // Enhanced discovery fields
+  enhancedDiscovery?: boolean;
+  aiSchemaSummary?: any;
+  anonymizationMap?: { [anonymizedName: string]: string };
+  validationRuleCache?: { [objectName: string]: any };
   createdAt: Date;
   updatedAt: Date;
   completed: boolean;
