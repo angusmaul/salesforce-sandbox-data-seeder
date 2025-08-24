@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { WizardSession } from '../shared/types/api';
+import { WizardSession, ConfigurationUpdate, WizardStep } from '../shared/types/api';
 
 export function useSession(sessionId: string | undefined) {
   const [session, setSession] = useState<WizardSession | null>(null);
@@ -142,6 +142,118 @@ export function useSession(sessionId: string | undefined) {
     fetchSession();
   }, [fetchSession]);
   
+  // Enhanced configuration update for conversational interface
+  const updateConfiguration = useCallback(async (configUpdate: ConfigurationUpdate) => {
+    const targetSessionId = sessionId || createdSessionId;
+    if (!targetSessionId) return false;
+
+    try {
+      // Build update payload from configuration update
+      const updates: Partial<WizardSession> = {};
+      
+      if (configUpdate.selectedObjects !== undefined) {
+        updates.selectedObjects = configUpdate.selectedObjects;
+      }
+      
+      if (configUpdate.configuration !== undefined) {
+        updates.configuration = {
+          ...session?.configuration,
+          ...configUpdate.configuration
+        };
+      }
+      
+      if (configUpdate.globalSettings !== undefined) {
+        updates.globalSettings = {
+          ...session?.globalSettings,
+          ...configUpdate.globalSettings
+        };
+      }
+      
+      if (configUpdate.currentStep !== undefined) {
+        updates.currentStep = configUpdate.currentStep;
+      }
+
+      const result = await updateSession(updates);
+      return !!result;
+    } catch (err) {
+      console.error('Configuration update failed:', err);
+      return false;
+    }
+  }, [sessionId, createdSessionId, session, updateSession]);
+
+  // Navigate to step with validation
+  const navigateToStep = useCallback(async (step: WizardStep) => {
+    if (!session) return false;
+
+    // Validate step navigation
+    const stepOrder: WizardStep[] = [
+      'authentication', 'discovery', 'selection', 'configuration', 'preview', 'execution', 'results'
+    ];
+    
+    const currentIndex = stepOrder.indexOf(session.currentStep);
+    const targetIndex = stepOrder.indexOf(step);
+    
+    // Check if step is reachable
+    if (targetIndex > currentIndex + 1) {
+      // Can't skip steps - check requirements
+      switch (step) {
+        case 'discovery':
+          if (!session.connectionInfo) return false;
+          break;
+        case 'selection':
+          if (!session.connectionInfo || !session.discoveredObjects?.length) return false;
+          break;
+        case 'configuration':
+          if (!session.selectedObjects?.length) return false;
+          break;
+        case 'preview':
+          if (!session.configuration || !Object.keys(session.configuration).length) return false;
+          break;
+        case 'execution':
+          if (!session.configuration || !session.selectedObjects?.length) return false;
+          break;
+        case 'results':
+          if (!session.executionResults) return false;
+          break;
+      }
+    }
+
+    // Navigate
+    const result = await updateSession({ currentStep: step });
+    return !!result;
+  }, [session, updateSession]);
+
+  // Bulk configuration update for complex changes
+  const applyBulkConfiguration = useCallback(async (changes: Partial<WizardSession>) => {
+    const targetSessionId = sessionId || createdSessionId;
+    if (!targetSessionId) return false;
+
+    try {
+      const result = await updateSession(changes);
+      return !!result;
+    } catch (err) {
+      console.error('Bulk configuration update failed:', err);
+      return false;
+    }
+  }, [sessionId, createdSessionId, updateSession]);
+
+  // Get configuration summary for AI context
+  const getConfigurationSummary = useCallback(() => {
+    if (!session) return null;
+
+    return {
+      currentStep: session.currentStep,
+      hasConnection: !!session.connectionInfo,
+      objectCount: session.discoveredObjects?.length || 0,
+      selectedCount: session.selectedObjects?.length || 0,
+      configuredObjects: session.configuration ? Object.keys(session.configuration) : [],
+      totalConfiguredRecords: session.configuration ? 
+        Object.values(session.configuration).reduce((total, config: any) => {
+          return total + (config?.recordCount || 0);
+        }, 0) : 0
+    };
+  }, [session]);
+  
   useEffect(() => {
     fetchSession();
   }, [fetchSession]);
@@ -152,6 +264,10 @@ export function useSession(sessionId: string | undefined) {
     error,
     updateSession,
     refreshSession,
+    updateConfiguration,
+    navigateToStep,
+    applyBulkConfiguration,
+    getConfigurationSummary,
     sessionId: sessionId || createdSessionId
   };
 }

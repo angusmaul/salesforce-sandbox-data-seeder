@@ -110,9 +110,37 @@ export interface ClaudeResponse {
 }
 
 export interface ClaudeAction {
-  type: 'navigate' | 'configure' | 'retry' | 'explain';
+  type: 'navigate' | 'configure' | 'retry' | 'explain' | 'apply_config' | 'clarify' | 'confirm' | 'cancel';
   label: string;
   data?: any;
+  requiresConfirmation?: boolean;
+  style?: 'primary' | 'secondary' | 'warning' | 'danger';
+}
+
+export interface ConfigurationUpdate {
+  selectedObjects?: string[];
+  configuration?: { [key: string]: any };
+  globalSettings?: any;
+  currentStep?: WizardStep;
+}
+
+export interface ConversationalConfigRequest {
+  sessionId: string;
+  userInput: string;
+  conversationHistory?: Array<{
+    role: 'user' | 'assistant';
+    content: string;
+    timestamp: Date;
+  }>;
+}
+
+export interface ConversationalConfigResponse {
+  message: string;
+  actions?: ClaudeAction[];
+  configurationPreview?: ConfigurationUpdate;
+  warnings?: string[];
+  errors?: string[];
+  requiresConfirmation?: boolean;
 }
 
 // Chat interface types

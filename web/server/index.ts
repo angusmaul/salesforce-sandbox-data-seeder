@@ -101,6 +101,10 @@ app.use('/api/monitoring', monitoringRoutes);
 app.use('/api/ai', aiChatRoutes);
 app.use('/api/sessions', sessionRoutes);
 
+// Import conversational config routes
+const conversationalConfigRoutes = require('./api/conversational-config.js');
+app.use('/api/conversational-config', conversationalConfigRoutes);
+
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
   const health = {

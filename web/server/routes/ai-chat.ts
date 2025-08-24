@@ -480,12 +480,55 @@ router.post('/stream/:sessionId', aiRateLimit, requireAIService, async (req, res
         user: context || {}
       };
 
-      // Get AI response
-      const response = await aiService!.chat(message, enhancedContext);
-      const responseTime = Date.now() - startTime;
+      // Check if this is a configuration request
+      let response: string;
+      let parsedResponse: any;
+      let configurationActions: any[] = [];
+
+      if (isConfigurationRequest(message)) {
+        // Use conversational config service
+        try {
+          const configResponse = await fetch(`http://localhost:${process.env.PORT || 3001}/api/conversational-config/${sessionId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              userInput: message,
+              conversationHistory: [] // TODO: Get from session context
+            })
+          });
+
+          if (configResponse.ok) {
+            const configResult = await configResponse.json();
+            if (configResult.success) {
+              response = configResult.data.message;
+              configurationActions = configResult.data.actions || [];
+              parsedResponse = {
+                suggestions: [],
+                actions: configurationActions
+              };
+            } else {
+              // Fallback to regular AI response
+              response = await aiService!.chat(message, enhancedContext);
+              parsedResponse = parseAIResponse(response, context);
+            }
+          } else {
+            // Fallback to regular AI response
+            response = await aiService!.chat(message, enhancedContext);
+            parsedResponse = parseAIResponse(response, context);
+          }
+        } catch (error) {
+          console.error('Conversational config error:', error);
+          // Fallback to regular AI response
+          response = await aiService!.chat(message, enhancedContext);
+          parsedResponse = parseAIResponse(response, context);
+        }
+      } else {
+        // Regular AI response
+        response = await aiService!.chat(message, enhancedContext);
+        parsedResponse = parseAIResponse(response, context);
+      }
       
-      // Parse response for structured data
-      const parsedResponse = parseAIResponse(response, context);
+      const responseTime = Date.now() - startTime;
       
       // Simulate streaming by breaking response into chunks
       const words = response.split(' ');
@@ -578,6 +621,30 @@ router.post('/stream/:sessionId', aiRateLimit, requireAIService, async (req, res
 });
 
 // Helper functions
+
+// Check if the message is a configuration request
+function isConfigurationRequest(message: string): boolean {
+  const lowerMessage = message.toLowerCase();
+  
+  // Configuration keywords
+  const configKeywords = [
+    'configure', 'config', 'set up', 'setup', 'create', 'generate',
+    'records', 'accounts', 'contacts', 'opportunities', 'leads',
+    'objects', 'data', 'how many', 'count', 'number of'
+  ];
+  
+  // Navigation keywords
+  const navKeywords = [
+    'navigate', 'go to', 'move to', 'step', 'next step', 'previous step'
+  ];
+  
+  // Check for configuration or navigation intents
+  const hasConfigKeyword = configKeywords.some(keyword => lowerMessage.includes(keyword));
+  const hasNavKeyword = navKeywords.some(keyword => lowerMessage.includes(keyword));
+  const hasNumbers = /\d+/.test(message);
+  
+  return hasConfigKeyword || hasNavKeyword || (hasNumbers && lowerMessage.includes('record'));
+}
 
 function parseAIResponse(response: string, context?: any): ClaudeResponse {
   // Enhanced response parsing

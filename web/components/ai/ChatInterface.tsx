@@ -2,7 +2,8 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Socket } from 'socket.io-client';
 import { MessageBubble } from './MessageBubble';
 import { useAIChat } from '../../hooks/useAIChat';
-import { ClaudeAction, WizardSession } from '../../shared/types/api';
+import { ClaudeAction, WizardSession, ConfigurationUpdate, WizardStep } from '../../shared/types/api';
+import ClarificationModal, { ClarificationRequest, ClarificationResponse } from './ClarificationModal';
 
 interface ChatInterfaceProps {
   sessionId: string;
@@ -13,6 +14,8 @@ interface ChatInterfaceProps {
   placeholder?: string;
   disabled?: boolean;
   onActionClick?: (action: ClaudeAction) => void;
+  onConfigurationUpdate?: (update: ConfigurationUpdate) => Promise<boolean>;
+  onStepNavigation?: (step: WizardStep) => Promise<boolean>;
 }
 
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({
@@ -23,11 +26,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   maxHeight = '600px',
   placeholder = 'Ask me anything about your Salesforce data generation...',
   disabled = false,
-  onActionClick
+  onActionClick,
+  onConfigurationUpdate,
+  onStepNavigation
 }) => {
   const [inputValue, setInputValue] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [pendingConfigActions, setPendingConfigActions] = useState<ClaudeAction[]>([]);
+  const [configurationPreview, setConfigurationPreview] = useState<ConfigurationUpdate | null>(null);
+  const [showClarificationModal, setShowClarificationModal] = useState(false);
+  const [clarificationRequests, setClarificationRequests] = useState<ClarificationRequest[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
@@ -94,7 +103,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   }, [handleSubmit]);
 
   // Handle action clicks
-  const handleActionClick = useCallback((action: ClaudeAction) => {
+  const handleActionClick = useCallback(async (action: ClaudeAction) => {
     // First try external handler
     if (onActionClick) {
       onActionClick(action);
@@ -106,26 +115,112 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       case 'retry':
         retryLastMessage().catch(console.error);
         break;
+
       case 'navigate':
-        if (action.data?.step) {
-          // Navigate to specific wizard step
-          console.log('Navigate to step:', action.data.step);
+        if (action.data?.step && onStepNavigation) {
+          try {
+            const success = await onStepNavigation(action.data.step);
+            if (success) {
+              await sendMessage(`✅ Navigated to ${action.data.step} step`);
+            } else {
+              await sendMessage(`❌ Could not navigate to ${action.data.step} step. Please check the requirements.`);
+            }
+          } catch (error) {
+            console.error('Navigation error:', error);
+            await sendMessage(`❌ Navigation failed: ${error}`);
+          }
+        } else {
+          console.log('Navigate to step:', action.data?.step);
         }
         break;
+
       case 'configure':
-        if (action.data?.configuration) {
-          // Apply configuration
-          console.log('Apply configuration:', action.data.configuration);
+      case 'apply_config':
+        if (action.data?.configuration && onConfigurationUpdate) {
+          if (action.requiresConfirmation) {
+            // Store pending actions for confirmation
+            setPendingConfigActions([action]);
+            setConfigurationPreview(action.data.configuration);
+          } else {
+            // Apply directly
+            try {
+              const success = await onConfigurationUpdate(action.data.configuration);
+              if (success) {
+                await sendMessage(`✅ Configuration applied successfully`);
+              } else {
+                await sendMessage(`❌ Failed to apply configuration. Please check the values and try again.`);
+              }
+            } catch (error) {
+              console.error('Configuration error:', error);
+              await sendMessage(`❌ Configuration failed: ${error}`);
+            }
+          }
+        } else {
+          console.log('Apply configuration:', action.data?.configuration);
         }
         break;
+
+      case 'confirm':
+        // Apply pending configuration actions
+        if (pendingConfigActions.length > 0 && configurationPreview && onConfigurationUpdate) {
+          try {
+            const success = await onConfigurationUpdate(configurationPreview);
+            if (success) {
+              await sendMessage(`✅ Configuration confirmed and applied successfully`);
+              setPendingConfigActions([]);
+              setConfigurationPreview(null);
+            } else {
+              await sendMessage(`❌ Failed to apply confirmed configuration`);
+            }
+          } catch (error) {
+            console.error('Confirmation error:', error);
+            await sendMessage(`❌ Confirmation failed: ${error}`);
+          }
+        }
+        break;
+
+      case 'cancel':
+        // Clear pending actions
+        setPendingConfigActions([]);
+        setConfigurationPreview(null);
+        await sendMessage(`Configuration changes cancelled`);
+        break;
+
+      case 'clarify':
+        if (action.data?.clarifications) {
+          setClarificationRequests(action.data.clarifications);
+          setShowClarificationModal(true);
+        } else if (action.data?.question) {
+          await sendMessage(action.data.question);
+        }
+        break;
+
       case 'explain':
         // Send follow-up question
-        sendMessage(`Can you explain more about: ${action.data?.topic || 'the previous response'}`);
+        const topic = action.data?.topic || 'the previous response';
+        await sendMessage(`Can you explain more about: ${topic}`);
         break;
+
       default:
         console.log('Unhandled action:', action);
     }
-  }, [onActionClick, retryLastMessage, sendMessage]);
+  }, [onActionClick, retryLastMessage, sendMessage, onStepNavigation, onConfigurationUpdate, pendingConfigActions, configurationPreview]);
+
+  // Handle clarification responses
+  const handleClarificationSubmit = useCallback(async (responses: ClarificationResponse[]) => {
+    setShowClarificationModal(false);
+    setClarificationRequests([]);
+    
+    // Send clarification responses back to the AI
+    const responseText = responses.map(r => `${r.question}: ${r.response}`).join('\n');
+    await sendMessage(`Here are my clarifications:\n${responseText}`);
+  }, [sendMessage]);
+
+  const handleClarificationCancel = useCallback(() => {
+    setShowClarificationModal(false);
+    setClarificationRequests([]);
+    sendMessage('I need to think about this more. Can you help me with something else?');
+  }, [sendMessage]);
 
   // Handle retry for failed messages
   const handleMessageRetry = useCallback(() => {
@@ -149,6 +244,60 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   // Connection status indicator
   const connectionStatus = isConnected ? 'connected' : 'disconnected';
   const statusColor = isConnected ? '#10b981' : '#ef4444';
+
+  // Configuration preview component
+  const renderConfigurationPreview = () => {
+    if (!configurationPreview || pendingConfigActions.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="configuration-preview">
+        <div className="preview-header">
+          <span className="preview-icon">⚙️</span>
+          <span className="preview-title">Configuration Preview</span>
+        </div>
+        <div className="preview-content">
+          {configurationPreview.selectedObjects && (
+            <div className="preview-section">
+              <strong>Selected Objects:</strong>
+              <ul>
+                {configurationPreview.selectedObjects.map(obj => (
+                  <li key={obj}>{obj}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {configurationPreview.configuration && (
+            <div className="preview-section">
+              <strong>Configuration:</strong>
+              <pre>{JSON.stringify(configurationPreview.configuration, null, 2)}</pre>
+            </div>
+          )}
+          {configurationPreview.globalSettings && (
+            <div className="preview-section">
+              <strong>Global Settings:</strong>
+              <pre>{JSON.stringify(configurationPreview.globalSettings, null, 2)}</pre>
+            </div>
+          )}
+        </div>
+        <div className="preview-actions">
+          <button
+            className="preview-button confirm"
+            onClick={() => handleActionClick({ type: 'confirm', label: 'Confirm' })}
+          >
+            ✅ Apply Changes
+          </button>
+          <button
+            className="preview-button cancel"
+            onClick={() => handleActionClick({ type: 'cancel', label: 'Cancel' })}
+          >
+            ❌ Cancel
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className={`chat-interface ${className} ${isCollapsed ? 'collapsed' : ''}`}>
@@ -205,6 +354,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
       {!isCollapsed && (
         <>
+          {/* Configuration Preview */}
+          {renderConfigurationPreview()}
+          
           {/* Messages */}
           <div 
             className="chat-messages"
@@ -303,6 +455,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           </div>
         </>
       )}
+      
+      {/* Clarification Modal */}
+      <ClarificationModal
+        isOpen={showClarificationModal}
+        clarifications={clarificationRequests}
+        onClose={() => setShowClarificationModal(false)}
+        onSubmit={handleClarificationSubmit}
+        onCancel={handleClarificationCancel}
+      />
     </div>
   );
 };

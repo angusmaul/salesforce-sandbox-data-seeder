@@ -230,6 +230,12 @@ export default function WizardPage() {
         onClose={() => setAssistantOpen(false)}
         sessionId={currentSessionId || session.id}
         currentStep={session.currentStep}
+        onStepChange={async (step) => {
+          await handleStepChange(step);
+        }}
+        onSessionUpdate={() => {
+          refreshSession();
+        }}
       />
     </>
   );

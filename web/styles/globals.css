@@ -17,6 +17,59 @@
 }
 
 @layer components {
+  /* Configuration Preview Styles */
+  .configuration-preview {
+    @apply bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4;
+  }
+  
+  .preview-header {
+    @apply flex items-center space-x-2 mb-3 font-medium text-blue-900;
+  }
+  
+  .preview-icon {
+    @apply text-lg;
+  }
+  
+  .preview-title {
+    @apply text-base font-semibold;
+  }
+  
+  .preview-content {
+    @apply space-y-3 text-sm;
+  }
+  
+  .preview-section {
+    @apply bg-white rounded p-3 border border-blue-100;
+  }
+  
+  .preview-section strong {
+    @apply font-medium text-blue-900 block mb-1;
+  }
+  
+  .preview-section ul {
+    @apply list-disc list-inside text-gray-700;
+  }
+  
+  .preview-section pre {
+    @apply bg-gray-50 rounded text-xs p-2 overflow-x-auto font-mono text-gray-800;
+  }
+  
+  .preview-actions {
+    @apply flex space-x-2 mt-4;
+  }
+  
+  .preview-button {
+    @apply px-4 py-2 rounded text-sm font-medium transition-colors;
+  }
+  
+  .preview-button.confirm {
+    @apply bg-green-600 text-white hover:bg-green-700;
+  }
+  
+  .preview-button.cancel {
+    @apply bg-gray-300 text-gray-700 hover:bg-gray-400;
+  }
+
   .btn {
     @apply inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 transition-colors duration-200;
   }
