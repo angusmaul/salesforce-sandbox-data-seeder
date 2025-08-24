@@ -6,7 +6,7 @@ state: open
 labels: ["epic"]
 created_at: 2025-08-22T04:22:13Z
 updated_at: 2025-08-24T01:44:28Z
-last_sync: 2025-08-24T04:22:10Z
+last_sync: 2025-08-24T18:25:00Z
 status: in_progress
 progress: 40%
 ---
