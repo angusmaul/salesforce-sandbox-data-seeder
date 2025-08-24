@@ -10,8 +10,10 @@ import {
   ChartBarIcon,
   CheckCircleIcon,
   XCircleIcon,
-  ExclamationTriangleIcon
+  ExclamationTriangleIcon,
+  BoltIcon
 } from '@heroicons/react/24/outline';
+import PerformanceDashboard from '../components/monitoring/PerformanceDashboard';
 
 interface SystemHealth {
   status: string;
@@ -74,6 +76,7 @@ export default function MonitoringPage() {
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [activeTab, setActiveTab] = useState<'system' | 'performance'>('system');
 
   const fetchData = async () => {
     try {
@@ -188,6 +191,34 @@ export default function MonitoringPage() {
                 )}
               </div>
             </div>
+
+            {/* Tab Navigation */}
+            <div className="border-b border-gray-200">
+              <nav className="-mb-px flex space-x-8">
+                <button
+                  onClick={() => setActiveTab('system')}
+                  className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                    activeTab === 'system'
+                      ? 'border-blue-500 text-blue-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  <ServerIcon className="h-4 w-4 inline mr-2" />
+                  System Status
+                </button>
+                <button
+                  onClick={() => setActiveTab('performance')}
+                  className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                    activeTab === 'performance'
+                      ? 'border-blue-500 text-blue-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  <BoltIcon className="h-4 w-4 inline mr-2" />
+                  AI Performance
+                </button>
+              </nav>
+            </div>
           </div>
         </header>
 
@@ -197,11 +228,13 @@ export default function MonitoringPage() {
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
               <p className="text-gray-600">Initializing...</p>
             </div>
-          ) : loading ? (
+          ) : loading && activeTab === 'system' ? (
             <div className="text-center py-12">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
               <p className="text-gray-600">Loading system status...</p>
             </div>
+          ) : activeTab === 'performance' ? (
+            <PerformanceDashboard />
           ) : (
             <>
               {/* System Health Overview */}

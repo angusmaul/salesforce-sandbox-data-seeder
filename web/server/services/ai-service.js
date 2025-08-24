@@ -1,6 +1,17 @@
-// AI Service - JavaScript wrapper for Claude API integration
+// AI Service - JavaScript wrapper for Claude API integration with performance optimization
 require('dotenv').config();
 const Anthropic = require('@anthropic-ai/sdk');
+
+// Import performance optimization services
+let AICacheService, PerformanceMonitor;
+try {
+  const { getAICacheService } = require('./ai-cache');
+  const { getPerformanceMonitor } = require('./performance-monitor');
+  AICacheService = getAICacheService;
+  PerformanceMonitor = getPerformanceMonitor;
+} catch (error) {
+  console.warn('⚠️ Performance optimization modules not available:', error.message);
+}
 
 // Singleton instance
 let aiServiceInstance = null;
@@ -25,6 +36,27 @@ class AIService {
       lastUpdated: null
     };
     this.usageHistory = [];
+    
+    // Initialize performance optimization services
+    this.cache = null;
+    this.performanceMonitor = null;
+    this.pendingRequests = new Map(); // For batching
+    this.batchTimer = null;
+    this.requestQueue = [];
+    
+    try {
+      if (AICacheService && PerformanceMonitor) {
+        this.cache = AICacheService({
+          defaultTTL: 1000 * 60 * 60, // 1 hour
+          maxSize: 1000,
+          maxMemoryMB: 50
+        });
+        this.performanceMonitor = PerformanceMonitor();
+        console.log('✅ AI Service performance optimization enabled');
+      }
+    } catch (error) {
+      console.warn('⚠️ Failed to initialize performance optimization:', error.message);
+    }
 
     // Check for demo mode first
     const DEMO_MODE = process.env.AI_DEMO_MODE === 'true';
@@ -47,6 +79,8 @@ class AIService {
   }
 
   async chat(message, sessionId) {
+    const startTime = Date.now();
+    
     if (!this.initialized) {
       return {
         success: false,
@@ -60,7 +94,8 @@ class AIService {
     
     if (DEMO_MODE) {
       // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
+      const delay = 1000 + Math.random() * 2000;
+      await new Promise(resolve => setTimeout(resolve, delay));
       
       // Return demo responses based on message content
       const demoResponses = {
@@ -81,16 +116,70 @@ class AIService {
         }
       }
       
-      return {
+      const result = {
         success: true,
         response: response + '\n\n*[Demo Mode - API limits bypassed]*',
         usage: { input_tokens: 10, output_tokens: 50 },
-        responseTime: 1500
+        responseTime: delay
       };
+      
+      // Record performance metrics even in demo mode
+      if (this.performanceMonitor) {
+        this.performanceMonitor.recordOperation({
+          operation: 'chat-demo',
+          duration: delay,
+          success: true,
+          metadata: {
+            tokenUsage: {
+              inputTokens: 10,
+              outputTokens: 50,
+              totalTokens: 60
+            },
+            cacheHit: false
+          }
+        });
+      }
+      
+      return result;
+    }
+
+    // Check cache first
+    if (this.cache) {
+      try {
+        const cachedResponse = await this.cache.getCachedChat(message, sessionId);
+        if (cachedResponse) {
+          const responseTime = Date.now() - startTime;
+          
+          // Record cache hit
+          if (this.performanceMonitor) {
+            this.performanceMonitor.recordOperation({
+              operation: 'chat',
+              duration: responseTime,
+              success: true,
+              metadata: {
+                tokenUsage: cachedResponse.usage ? {
+                  inputTokens: cachedResponse.usage.input_tokens || 0,
+                  outputTokens: cachedResponse.usage.output_tokens || 0,
+                  totalTokens: (cachedResponse.usage.input_tokens || 0) + (cachedResponse.usage.output_tokens || 0)
+                } : undefined,
+                cacheHit: true
+              }
+            });
+          }
+          
+          return {
+            ...cachedResponse,
+            responseTime,
+            cached: true
+          };
+        }
+      } catch (error) {
+        console.warn('Cache lookup failed:', error.message);
+      }
     }
 
     try {
-      const startTime = Date.now();
+      const apiStartTime = Date.now();
       
       // Reduce message size to avoid acceleration limits
       // Trim the message to essential content only
@@ -106,7 +195,9 @@ class AIService {
         }]
       });
 
-      const responseTime = Date.now() - startTime;
+      const responseTime = Date.now() - apiStartTime;
+      const totalTime = Date.now() - startTime;
+      
       this.stats.totalRequests++;
       this.stats.avgResponseTime = (this.stats.avgResponseTime + responseTime) / 2;
       
@@ -129,41 +220,91 @@ class AIService {
         }
       }
 
-      return {
+      const result = {
         success: true,
         response: response.content[0].text,
         usage: response.usage,
-        responseTime
+        responseTime: totalTime
       };
+
+      // Cache successful response
+      if (this.cache && result.success) {
+        try {
+          await this.cache.cacheChat(message, sessionId, result, responseTime);
+        } catch (error) {
+          console.warn('Failed to cache chat response:', error.message);
+        }
+      }
+
+      // Record performance metrics
+      if (this.performanceMonitor) {
+        this.performanceMonitor.recordOperation({
+          operation: 'chat',
+          duration: totalTime,
+          success: true,
+          metadata: {
+            tokenUsage: response.usage ? {
+              inputTokens: response.usage.input_tokens,
+              outputTokens: response.usage.output_tokens,
+              totalTokens: response.usage.input_tokens + response.usage.output_tokens
+            } : undefined,
+            modelUsed: process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022',
+            cacheHit: false,
+            requestSize: trimmedMessage.length,
+            responseSize: result.response.length
+          }
+        });
+      }
+
+      return result;
     } catch (error) {
       console.error('Claude API error:', error.status, JSON.stringify(error.error || error.message));
+      
+      const totalTime = Date.now() - startTime;
+      let errorResult;
       
       // Handle rate limit errors specifically
       if (error.status === 429) {
         // Check if it's acceleration limit
         const errorMessage = error.error?.error?.message || error.message || '';
         if (errorMessage.includes('acceleration') || errorMessage.includes('usage increase rate')) {
-          return {
+          errorResult = {
             success: false,
             response: 'Your API key is experiencing usage acceleration limits. This is normal for new keys. The system will gradually increase your allowed usage. Please wait 2 minutes before trying again.',
             error: 'acceleration_limit',
             retryAfter: 120 // 2 minutes for acceleration limits
           };
+        } else {
+          errorResult = {
+            success: false,
+            response: 'AI assistant is temporarily rate-limited. This is normal for new API keys - rate limits will increase gradually with usage. Please try again in a moment.',
+            error: 'rate_limit',
+            retryAfter: 60 // Suggest retry after 60 seconds
+          };
         }
-        
-        return {
+      } else {
+        errorResult = {
           success: false,
-          response: 'AI assistant is temporarily rate-limited. This is normal for new API keys - rate limits will increase gradually with usage. Please try again in a moment.',
-          error: 'rate_limit',
-          retryAfter: 60 // Suggest retry after 60 seconds
+          response: 'Failed to get AI response. Please try again.',
+          error: error.message
         };
       }
       
-      return {
-        success: false,
-        response: 'Failed to get AI response. Please try again.',
-        error: error.message
-      };
+      // Record error metrics
+      if (this.performanceMonitor) {
+        this.performanceMonitor.recordOperation({
+          operation: 'chat',
+          duration: totalTime,
+          success: false,
+          error: error.message || 'Unknown error',
+          metadata: {
+            modelUsed: process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022',
+            cacheHit: false
+          }
+        });
+      }
+      
+      return errorResult;
     }
   }
   
@@ -190,8 +331,34 @@ class AIService {
   }
 
   async analyzeSchema(schemaData) {
+    const startTime = Date.now();
+    
     if (!this.initialized) {
       return null;
+    }
+
+    // Check cache first
+    if (this.cache) {
+      try {
+        const cachedResponse = await this.cache.getCachedSchemaAnalysis(schemaData);
+        if (cachedResponse) {
+          const responseTime = Date.now() - startTime;
+          
+          // Record cache hit
+          if (this.performanceMonitor) {
+            this.performanceMonitor.recordOperation({
+              operation: 'schema-analysis',
+              duration: responseTime,
+              success: true,
+              metadata: { cacheHit: true }
+            });
+          }
+          
+          return cachedResponse;
+        }
+      } catch (error) {
+        console.warn('Schema analysis cache lookup failed:', error.message);
+      }
     }
 
     try {
@@ -217,15 +384,55 @@ Keep response concise and technical.`;
       });
 
       const text = response.content[0].text;
+      const responseTime = Date.now() - startTime;
       
       // Parse response into structured format
-      return {
+      const result = {
         constraints: this.extractConstraints(text),
         recommendations: this.extractRecommendations(text),
         analysis: text
       };
+
+      // Cache successful response
+      if (this.cache) {
+        try {
+          await this.cache.cacheSchemaAnalysis(schemaData, result, responseTime);
+        } catch (error) {
+          console.warn('Failed to cache schema analysis:', error.message);
+        }
+      }
+
+      // Record performance metrics
+      if (this.performanceMonitor) {
+        this.performanceMonitor.recordOperation({
+          operation: 'schema-analysis',
+          duration: responseTime,
+          success: true,
+          metadata: {
+            tokenUsage: response.usage ? {
+              inputTokens: response.usage.input_tokens,
+              outputTokens: response.usage.output_tokens,
+              totalTokens: response.usage.input_tokens + response.usage.output_tokens
+            } : undefined,
+            cacheHit: false
+          }
+        });
+      }
+      
+      return result;
     } catch (error) {
       console.error('Schema analysis error:', error.message);
+      
+      const responseTime = Date.now() - startTime;
+      if (this.performanceMonitor) {
+        this.performanceMonitor.recordOperation({
+          operation: 'schema-analysis',
+          duration: responseTime,
+          success: false,
+          error: error.message
+        });
+      }
+      
       return null;
     }
   }
@@ -453,6 +660,132 @@ Format response as JSON with: action, parameters, message`;
 
   async getUsageStats() {
     return this.stats;
+  }
+
+  // Performance optimization methods
+  async getPerformanceMetrics(timeWindowMs = 1000 * 60 * 60) {
+    if (!this.performanceMonitor) {
+      return null;
+    }
+    return this.performanceMonitor.getMetrics(timeWindowMs);
+  }
+
+  async getCostMetrics() {
+    if (!this.performanceMonitor) {
+      return null;
+    }
+    return this.performanceMonitor.getCostMetrics();
+  }
+
+  async getCacheStats() {
+    if (!this.cache) {
+      return null;
+    }
+    return this.cache.getStats();
+  }
+
+  async getCacheHealth() {
+    if (!this.cache) {
+      return null;
+    }
+    return this.cache.getHealthInfo();
+  }
+
+  async getPerformanceRecommendations() {
+    if (!this.performanceMonitor) {
+      return [];
+    }
+    return this.performanceMonitor.getRecommendations();
+  }
+
+  // Cache management methods
+  async clearCache() {
+    if (this.cache) {
+      this.cache.clear();
+      return true;
+    }
+    return false;
+  }
+
+  async invalidateCache(criteria) {
+    if (this.cache) {
+      return this.cache.invalidate(criteria);
+    }
+    return 0;
+  }
+
+  // Batch processing methods
+  async processBatch(operations) {
+    if (!this.performanceMonitor || !this.initialized) {
+      return null;
+    }
+
+    const batchId = `batch_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const results = [];
+    const batchOperations = [];
+
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      let result;
+      const startTime = Date.now();
+
+      try {
+        switch (op.type) {
+          case 'chat':
+            result = await this.chat(op.message, op.sessionId);
+            break;
+          case 'schema-analysis':
+            result = await this.analyzeSchema(op.schemaData);
+            break;
+          case 'field-suggestions':
+            result = await this.generateFieldSuggestions(op.objectType, op.fieldType, op.context);
+            break;
+          case 'validation':
+            result = await this.validateDataPattern(op.data, op.validationRules);
+            break;
+          default:
+            result = { success: false, error: 'Unknown operation type' };
+        }
+
+        const duration = Date.now() - startTime;
+        batchOperations.push({
+          operation: op.type,
+          duration,
+          success: result && (result.success !== false),
+          metadata: {
+            tokenUsage: result && result.usage ? {
+              inputTokens: result.usage.input_tokens || 0,
+              outputTokens: result.usage.output_tokens || 0,
+              totalTokens: (result.usage.input_tokens || 0) + (result.usage.output_tokens || 0)
+            } : undefined
+          }
+        });
+
+        results.push({ index: i, result });
+      } catch (error) {
+        const duration = Date.now() - startTime;
+        batchOperations.push({
+          operation: op.type,
+          duration,
+          success: false,
+          error: error.message
+        });
+        results.push({ index: i, result: { success: false, error: error.message } });
+      }
+    }
+
+    // Record batch metrics
+    this.performanceMonitor.recordBatchOperation(batchId, batchOperations);
+
+    return {
+      batchId,
+      results,
+      summary: {
+        total: operations.length,
+        successful: results.filter(r => r.result && r.result.success !== false).length,
+        failed: results.filter(r => !r.result || r.result.success === false).length
+      }
+    };
   }
 
   // Helper methods

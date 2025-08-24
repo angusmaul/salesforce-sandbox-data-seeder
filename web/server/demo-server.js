@@ -21,7 +21,10 @@ const path = require('path');
 // Use native fetch in Node.js 18+ or polyfill for older versions
 const fetch = globalThis.fetch || require('node-fetch');
 
-// Validation Engine imports (TypeScript compiled to JS)
+// AI Service and Performance Monitoring imports
+const AIServiceJS = require('./services/ai-service');
+
+// Validation Engine imports (TypeScript compiled to JS)  
 let ValidationEngine, AIService, EnhancedDiscoveryService, PreValidator;
 try {
   // These will be compiled TypeScript modules
@@ -4594,6 +4597,165 @@ app.get('/api/ai/rate-limits', async (req, res) => {
   } catch (error) {
     res.status(500).json({
       error: error.message
+    });
+  }
+});
+
+// AI Performance Metrics Endpoint
+app.get('/api/ai/performance-metrics', async (req, res) => {
+  if (!aiService) {
+    return res.status(503).json({
+      success: false,
+      error: 'AI service not available'
+    });
+  }
+
+  try {
+    const timeWindow = req.query.window || '1h';
+    const timeWindowMs = {
+      '15m': 15 * 60 * 1000,
+      '1h': 60 * 60 * 1000,
+      '6h': 6 * 60 * 60 * 1000,
+      '24h': 24 * 60 * 60 * 1000
+    }[timeWindow] || 60 * 60 * 1000;
+
+    const metrics = await aiService.getPerformanceMetrics(timeWindowMs);
+    
+    if (!metrics) {
+      return res.json({
+        timeWindow,
+        operations: {},
+        system: { avgCpuUsage: 0, avgMemoryUsage: 0, peakMemoryUsage: 0 },
+        errors: []
+      });
+    }
+
+    res.json(metrics);
+  } catch (error) {
+    console.error('Performance metrics error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch performance metrics'
+    });
+  }
+});
+
+// AI Cost Metrics Endpoint
+app.get('/api/ai/cost-metrics', async (req, res) => {
+  if (!aiService) {
+    return res.status(503).json({
+      success: false,
+      error: 'AI service not available'
+    });
+  }
+
+  try {
+    const costMetrics = await aiService.getCostMetrics();
+    
+    if (!costMetrics) {
+      return res.json({
+        daily: { cost: 0, tokens: 0, operations: 0, budget: 10, remaining: 10, percentUsed: 0 },
+        monthly: { cost: 0, tokens: 0, operations: 0, budget: 250, remaining: 250, percentUsed: 0 },
+        alerts: [],
+        breakdown: []
+      });
+    }
+
+    res.json(costMetrics);
+  } catch (error) {
+    console.error('Cost metrics error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch cost metrics'
+    });
+  }
+});
+
+// AI Cache Stats Endpoint
+app.get('/api/ai/cache-stats', async (req, res) => {
+  if (!aiService) {
+    return res.status(503).json({
+      success: false,
+      error: 'AI service not available'
+    });
+  }
+
+  try {
+    const cacheStats = await aiService.getCacheStats();
+    
+    if (!cacheStats) {
+      return res.json({
+        totalRequests: 0,
+        hits: 0,
+        misses: 0,
+        hitRate: 0,
+        totalSize: 0,
+        entriesCount: 0,
+        memoryUsageMB: 0,
+        config: { maxSize: 1000, maxMemoryMB: 50, defaultTTL: 3600000 }
+      });
+    }
+
+    res.json(cacheStats);
+  } catch (error) {
+    console.error('Cache stats error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch cache stats'
+    });
+  }
+});
+
+// AI System Metrics Endpoint
+app.get('/api/ai/system-metrics', async (req, res) => {
+  if (!aiService) {
+    return res.status(503).json([]);
+  }
+
+  try {
+    // For now return empty array as system metrics implementation is in progress
+    res.json([]);
+  } catch (error) {
+    console.error('System metrics error:', error);
+    res.status(500).json([]);
+  }
+});
+
+// AI Recommendations Endpoint
+app.get('/api/ai/recommendations', async (req, res) => {
+  if (!aiService) {
+    return res.json([]);
+  }
+
+  try {
+    const recommendations = await aiService.getPerformanceRecommendations();
+    res.json(recommendations || []);
+  } catch (error) {
+    console.error('Recommendations error:', error);
+    res.json([]);
+  }
+});
+
+// AI Cache Management Endpoints
+app.post('/api/ai/cache/clear', async (req, res) => {
+  if (!aiService) {
+    return res.status(503).json({
+      success: false,
+      error: 'AI service not available'
+    });
+  }
+
+  try {
+    const cleared = await aiService.clearCache();
+    res.json({
+      success: true,
+      cleared
+    });
+  } catch (error) {
+    console.error('Cache clear error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to clear cache'
     });
   }
 });

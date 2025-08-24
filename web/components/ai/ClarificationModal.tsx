@@ -32,9 +32,7 @@ export const ClarificationModal: React.FC<ClarificationModalProps> = ({
   onCancel
 }) => {
   const [responses, setResponses] = useState<{ [key: string]: ClarificationResponse }>({});
-  const [currentIndex, setCurrent
-
-ndex] = useState(0);
+  const [currentIndex, setCurrentIndex] = useState(0);
 
   // Initialize responses when clarifications change
   React.useEffect(() => {
