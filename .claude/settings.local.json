@@ -45,7 +45,14 @@
       "Bash(gh extension:*)",
       "WebFetch(domain:)",
       "Bash(gh issue view:*)",
-      "Bash(gh issue list:*)"
+      "Bash(gh issue list:*)",
+      "Bash(npm run dev:*)",
+      "Bash(curl:*)",
+      "Bash(echo $NODE_OPTIONS)",
+      "Bash(node:*)",
+      "Bash(lsof:*)",
+      "Bash(ss:*)",
+      "Bash(pkill:*)"
     ],
     "additionalDirectories": [
       "/tmp"

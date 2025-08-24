@@ -2,6 +2,9 @@
 require('dotenv').config();
 const Anthropic = require('@anthropic-ai/sdk');
 
+// Singleton instance
+let aiServiceInstance = null;
+
 class AIService {
   constructor() {
     this.anthropic = null;
@@ -12,6 +15,16 @@ class AIService {
       totalCost: 0,
       avgResponseTime: 0
     };
+    this.rateLimits = {
+      requestsPerMinute: null,
+      requestsPerDay: null,
+      tokensPerMinute: null,
+      tokensPerDay: null,
+      remaining: {},
+      resets: {},
+      lastUpdated: null
+    };
+    this.usageHistory = [];
 
     // Check for demo mode first
     const DEMO_MODE = process.env.AI_DEMO_MODE === 'true';
@@ -79,19 +92,42 @@ class AIService {
     try {
       const startTime = Date.now();
       
+      // Reduce message size to avoid acceleration limits
+      // Trim the message to essential content only
+      const trimmedMessage = this.trimMessage(message);
+      
       const response = await this.anthropic.messages.create({
         model: process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022',
-        max_tokens: parseInt(process.env.CLAUDE_MAX_TOKENS) || 500, // Reduced tokens for rate limit
+        max_tokens: 100, // Significantly reduced for acceleration limit
         temperature: parseFloat(process.env.CLAUDE_TEMPERATURE) || 0.7,
         messages: [{
           role: 'user',
-          content: message
+          content: trimmedMessage
         }]
       });
 
       const responseTime = Date.now() - startTime;
       this.stats.totalRequests++;
       this.stats.avgResponseTime = (this.stats.avgResponseTime + responseTime) / 2;
+      
+      // Track token usage
+      if (response.usage) {
+        this.stats.totalTokens += (response.usage.input_tokens + response.usage.output_tokens);
+        
+        // Store usage history
+        this.usageHistory.push({
+          timestamp: new Date().toISOString(),
+          inputTokens: response.usage.input_tokens,
+          outputTokens: response.usage.output_tokens,
+          totalTokens: response.usage.input_tokens + response.usage.output_tokens,
+          responseTime
+        });
+        
+        // Keep only last 100 requests in history
+        if (this.usageHistory.length > 100) {
+          this.usageHistory.shift();
+        }
+      }
 
       return {
         success: true,
@@ -100,10 +136,21 @@ class AIService {
         responseTime
       };
     } catch (error) {
-      console.error('Claude API error:', error.message);
+      console.error('Claude API error:', error.status, JSON.stringify(error.error || error.message));
       
       // Handle rate limit errors specifically
       if (error.status === 429) {
+        // Check if it's acceleration limit
+        const errorMessage = error.error?.error?.message || error.message || '';
+        if (errorMessage.includes('acceleration') || errorMessage.includes('usage increase rate')) {
+          return {
+            success: false,
+            response: 'Your API key is experiencing usage acceleration limits. This is normal for new keys. The system will gradually increase your allowed usage. Please wait 2 minutes before trying again.',
+            error: 'acceleration_limit',
+            retryAfter: 120 // 2 minutes for acceleration limits
+          };
+        }
+        
         return {
           success: false,
           response: 'AI assistant is temporarily rate-limited. This is normal for new API keys - rate limits will increase gradually with usage. Please try again in a moment.',
@@ -118,6 +165,28 @@ class AIService {
         error: error.message
       };
     }
+  }
+  
+  // Helper method to trim messages to reduce token usage
+  trimMessage(message) {
+    // Remove excess whitespace and limit message length
+    const cleaned = message.replace(/\s+/g, ' ').trim();
+    
+    // Extract only the user's actual question, removing context if too long
+    const lines = cleaned.split('\n');
+    const userMessageStart = lines.findIndex(line => line.includes('User message:'));
+    
+    if (userMessageStart !== -1 && userMessageStart < lines.length - 1) {
+      // Get just the user's message part
+      const userPart = lines.slice(userMessageStart).join(' ');
+      const actualMessage = userPart.replace('User message:', '').trim();
+      
+      // Create minimal context
+      return `Salesforce data generation assistant. User asks: ${actualMessage.substring(0, 200)}`;
+    }
+    
+    // Fallback: just truncate to reasonable length
+    return cleaned.substring(0, 300);
   }
 
   async analyzeSchema(schemaData) {
@@ -324,8 +393,62 @@ Format response as JSON with: action, parameters, message`;
       model: process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022',
       rateLimit: process.env.CLAUDE_RATE_LIMIT_RPM || 60,
       initialized: this.initialized,
-      apiKeyConfigured: !!process.env.ANTHROPIC_API_KEY
+      apiKeyConfigured: !!process.env.ANTHROPIC_API_KEY,
+      rateLimits: this.rateLimits,
+      currentUsage: this.getRateLimitInfo()
     };
+  }
+  
+  getRateLimitInfo() {
+    // Calculate current usage rate
+    const now = Date.now();
+    const oneMinuteAgo = now - 60000;
+    const oneDayAgo = now - 86400000;
+    
+    const recentRequests = this.usageHistory.filter(h => 
+      new Date(h.timestamp).getTime() > oneMinuteAgo
+    );
+    
+    const dailyRequests = this.usageHistory.filter(h => 
+      new Date(h.timestamp).getTime() > oneDayAgo
+    );
+    
+    const recentTokens = recentRequests.reduce((sum, r) => sum + r.totalTokens, 0);
+    const dailyTokens = dailyRequests.reduce((sum, r) => sum + r.totalTokens, 0);
+    
+    return {
+      current: {
+        requestsPerMinute: recentRequests.length,
+        tokensPerMinute: recentTokens,
+        requestsPerDay: dailyRequests.length,
+        tokensPerDay: dailyTokens
+      },
+      limits: this.rateLimits,
+      stats: this.stats,
+      recentHistory: this.usageHistory.slice(-10), // Last 10 requests
+      recommendations: this.getRateLimitRecommendations(recentTokens)
+    };
+  }
+  
+  getRateLimitRecommendations(recentTokens) {
+    const recommendations = [];
+    
+    if (recentTokens > 1000) {
+      recommendations.push('High token usage detected. Consider reducing message length.');
+    }
+    
+    if (this.usageHistory.length > 0) {
+      const lastRequest = this.usageHistory[this.usageHistory.length - 1];
+      if (lastRequest.inputTokens > 500) {
+        recommendations.push('Input tokens are high. The trimMessage function should help reduce this.');
+      }
+    }
+    
+    if (this.stats.totalRequests < 10) {
+      recommendations.push('New API key detected. Acceleration limits will ease after gradual usage over 2-3 days.');
+    }
+    
+    return recommendations;
   }
 
   async getUsageStats() {
@@ -387,6 +510,14 @@ Format response as JSON with: action, parameters, message`;
     };
     
     return suggestions[fieldType] || ['Value 1', 'Value 2', 'Value 3'];
+  }
+
+  // Static method to get singleton instance
+  static getInstance() {
+    if (!aiServiceInstance) {
+      aiServiceInstance = new AIService();
+    }
+    return aiServiceInstance;
   }
 }
 

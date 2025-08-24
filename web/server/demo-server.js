@@ -119,7 +119,7 @@ let enhancedDiscovery = null;
 try {
   // Use the JavaScript AI service from server/services/ai-service.js for chat
   const AIServiceJS = require('./services/ai-service');
-  aiService = new AIServiceJS();
+  aiService = AIServiceJS.getInstance();
   console.log('✅ AI Service initialized for chat functionality');
 } catch (error) {
   console.error('❌ Failed to initialize AI Service for chat:', error.message);
@@ -4268,30 +4268,25 @@ app.post('/api/ai-chat/stream/:sessionId', async (req, res) => {
     const DEMO_MODE = process.env.AI_DEMO_MODE === 'true';
     
     if (!DEMO_MODE) {
-      // Conservative rate limiting for new API keys - 1 request per 60 seconds per session
+      // More lenient rate limiting - 1 request per 10 seconds per session
+      // This helps avoid triggering acceleration limits while still preventing abuse
       const now = Date.now();
       const lastRequest = chatRateLimit.get(sessionId);
-      if (lastRequest && (now - lastRequest) < 60000) {
-        const waitTime = Math.ceil((60000 - (now - lastRequest)) / 1000);
+      if (lastRequest && (now - lastRequest) < 10000) {
+        const waitTime = Math.ceil((10000 - (now - lastRequest)) / 1000);
         return res.status(429).json({
           success: false,
-          error: `Please wait ${waitTime} seconds between AI chat messages. New API keys have conservative rate limits that improve with usage.`,
+          error: `Please wait ${waitTime} seconds between AI chat messages to avoid rate limits.`,
           retryAfter: waitTime
         });
       }
       chatRateLimit.set(sessionId, now);
     }
     
-    // Load AI service if available
-    let aiService = null;
-    try {
-      const AIService = require('./services/ai-service');
-      aiService = new AIService();
-    } catch (error) {
-      console.log('AI Service not available:', error.message);
-    }
+    // Get global AI service instance
+    let aiServiceInstance = aiService;
     
-    if (!aiService || !aiService.initialized) {
+    if (!aiServiceInstance || !aiServiceInstance.initialized) {
       return res.status(503).json({
         success: false,
         error: 'AI service not available. Please configure ANTHROPIC_API_KEY.'
@@ -4311,7 +4306,7 @@ User message: ${message}
 Provide helpful guidance for data generation, validation rules, and Salesforce best practices.`;
     
     // Get AI response
-    const response = await aiService.chat(contextPrompt, sessionId);
+    const response = await aiServiceInstance.chat(contextPrompt, sessionId);
     
     if (response.success) {
       // Send response via WebSocket room (all clients in this session)
@@ -4356,14 +4351,10 @@ Provide helpful guidance for data generation, validation rules, and Salesforce b
 // AI Health Check
 app.get('/api/ai/health', async (req, res) => {
   try {
-    let aiService = null;
-    try {
-      const AIService = require('./services/ai-service');
-      aiService = new AIService();
-    } catch (error) {
+    if (!aiService) {
       return res.json({
         status: 'unavailable',
-        error: 'AI service module not loaded'
+        error: 'AI service not initialized'
       });
     }
     
@@ -4380,11 +4371,7 @@ app.get('/api/ai/health', async (req, res) => {
 // AI Usage Stats
 app.get('/api/ai/stats', async (req, res) => {
   try {
-    let aiService = null;
-    try {
-      const AIService = require('./services/ai-service');
-      aiService = new AIService();
-    } catch (error) {
+    if (!aiService) {
       return res.json({
         error: 'AI service not available'
       });
@@ -4392,6 +4379,32 @@ app.get('/api/ai/stats', async (req, res) => {
     
     const stats = await aiService.getUsageStats();
     res.json(stats);
+  } catch (error) {
+    res.status(500).json({
+      error: error.message
+    });
+  }
+});
+
+// AI Rate Limit Monitor
+app.get('/api/ai/rate-limits', async (req, res) => {
+  try {
+    if (!aiService) {
+      return res.json({
+        error: 'AI service not available',
+        initialized: false
+      });
+    }
+    
+    const rateLimitInfo = aiService.getRateLimitInfo();
+    res.json({
+      success: true,
+      ...rateLimitInfo,
+      serverRateLimit: {
+        secondsBetweenRequests: 10,
+        description: 'Server-side rate limiting to prevent acceleration limit errors'
+      }
+    });
   } catch (error) {
     res.status(500).json({
       error: error.message

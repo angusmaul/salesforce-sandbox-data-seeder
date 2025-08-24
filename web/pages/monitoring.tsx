@@ -26,11 +26,54 @@ interface SessionInfo {
   completedSessions: number;
 }
 
+interface AIHealthInfo {
+  status: string;
+  model: string;
+  initialized: boolean;
+  apiKeyConfigured: boolean;
+  currentUsage?: {
+    current: {
+      requestsPerMinute: number;
+      tokensPerMinute: number;
+      requestsPerDay: number;
+      tokensPerDay: number;
+    };
+    stats: {
+      totalRequests: number;
+      totalTokens: number;
+      avgResponseTime: number;
+    };
+    recommendations?: string[];
+  };
+}
+
+interface RateLimitInfo {
+  current: {
+    requestsPerMinute: number;
+    tokensPerMinute: number;
+    requestsPerDay: number;
+    tokensPerDay: number;
+  };
+  stats: {
+    totalRequests: number;
+    totalTokens: number;
+    avgResponseTime: number;
+  };
+  recommendations?: string[];
+  serverRateLimit?: {
+    secondsBetweenRequests: number;
+    description: string;
+  };
+}
+
 export default function MonitoringPage() {
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [sessions, setSessions] = useState<SessionInfo | null>(null);
+  const [aiHealth, setAIHealth] = useState<AIHealthInfo | null>(null);
+  const [rateLimits, setRateLimits] = useState<RateLimitInfo | null>(null);
   const [loading, setLoading] = useState(true);
-  const [lastUpdate, setLastUpdate] = useState(new Date());
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [mounted, setMounted] = useState(false);
 
   const fetchData = async () => {
     try {
@@ -52,6 +95,26 @@ export default function MonitoringPage() {
         });
       }
 
+      // Fetch AI health information
+      try {
+        const aiHealthResponse = await fetch('http://localhost:3001/api/ai/health');
+        const aiHealthData = await aiHealthResponse.json();
+        setAIHealth(aiHealthData);
+      } catch (error) {
+        console.error('Failed to fetch AI health:', error);
+      }
+
+      // Fetch rate limit information
+      try {
+        const rateLimitsResponse = await fetch('http://localhost:3001/api/ai/rate-limits');
+        const rateLimitsData = await rateLimitsResponse.json();
+        if (rateLimitsData.success) {
+          setRateLimits(rateLimitsData);
+        }
+      } catch (error) {
+        console.error('Failed to fetch rate limits:', error);
+      }
+
       setLastUpdate(new Date());
     } catch (error) {
       console.error('Failed to fetch monitoring data:', error);
@@ -61,6 +124,7 @@ export default function MonitoringPage() {
   };
 
   useEffect(() => {
+    setMounted(true);
     fetchData();
     
     // Auto-refresh every 30 seconds
@@ -119,14 +183,21 @@ export default function MonitoringPage() {
               <h1 className="text-2xl font-bold text-gray-900">System Monitoring</h1>
               <div className="flex items-center text-sm text-gray-500">
                 <ClockIcon className="h-4 w-4 mr-1" />
-                Last updated: {lastUpdate.toLocaleTimeString()}
+                {mounted && lastUpdate && (
+                  <span>Last updated: {lastUpdate.toLocaleTimeString()}</span>
+                )}
               </div>
             </div>
           </div>
         </header>
 
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          {loading ? (
+          {!mounted ? (
+            <div className="text-center py-12">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+              <p className="text-gray-600">Initializing...</p>
+            </div>
+          ) : loading ? (
             <div className="text-center py-12">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
               <p className="text-gray-600">Loading system status...</p>
@@ -204,7 +275,7 @@ export default function MonitoringPage() {
                     <div className="flex justify-between">
                       <span className="text-gray-600">Last Check:</span>
                       <span className="font-medium">
-                        {health?.timestamp ? new Date(health.timestamp).toLocaleString() : 'Never'}
+                        {mounted && health?.timestamp ? new Date(health.timestamp).toLocaleString() : 'Never'}
                       </span>
                     </div>
                     <div className="flex justify-between">
@@ -247,6 +318,95 @@ export default function MonitoringPage() {
                 </div>
               </div>
 
+              {/* AI Service Health */}
+              <div className="mt-8 bg-white rounded-lg shadow-sm p-6">
+                <h3 className="text-xl font-semibold text-gray-900 mb-4">AI Service Health</h3>
+                {aiHealth ? (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div className="space-y-3">
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Status:</span>
+                        <span className={`font-medium ${aiHealth.status === 'healthy' ? 'text-green-600' : 'text-red-600'}`}>
+                          {aiHealth.status === 'healthy' ? '✅ Healthy' : '❌ Unavailable'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Model:</span>
+                        <span className="font-medium text-sm">{aiHealth.model || 'Not configured'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">API Key:</span>
+                        <span className={`font-medium ${aiHealth.apiKeyConfigured ? 'text-green-600' : 'text-red-600'}`}>
+                          {aiHealth.apiKeyConfigured ? 'Configured' : 'Not configured'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Total Requests:</span>
+                        <span className="font-medium">{aiHealth.currentUsage?.stats.totalRequests || 0}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Total Tokens:</span>
+                        <span className="font-medium">{aiHealth.currentUsage?.stats.totalTokens || 0}</span>
+                      </div>
+                    </div>
+                    <div className="space-y-3">
+                      <h4 className="font-medium text-gray-900">Current Usage</h4>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Requests/min:</span>
+                        <span className="font-medium">{rateLimits?.current.requestsPerMinute || 0}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Tokens/min:</span>
+                        <span className="font-medium">{rateLimits?.current.tokensPerMinute || 0}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Requests/day:</span>
+                        <span className="font-medium">{rateLimits?.current.requestsPerDay || 0}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Tokens/day:</span>
+                        <span className="font-medium">{rateLimits?.current.tokensPerDay || 0}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Avg Response Time:</span>
+                        <span className="font-medium">
+                          {aiHealth.currentUsage?.stats.avgResponseTime 
+                            ? `${Math.round(aiHealth.currentUsage.stats.avgResponseTime)}ms` 
+                            : 'N/A'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-gray-500">AI service information not available</p>
+                )}
+                
+                {/* Rate Limit Recommendations */}
+                {rateLimits?.recommendations && rateLimits.recommendations.length > 0 && (
+                  <div className="mt-4 p-4 bg-amber-50 rounded-lg">
+                    <h4 className="font-medium text-amber-900 mb-2">Recommendations</h4>
+                    <ul className="space-y-1">
+                      {rateLimits.recommendations.map((rec, index) => (
+                        <li key={index} className="text-sm text-amber-800">• {rec}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                
+                {/* Server Rate Limit Info */}
+                {rateLimits?.serverRateLimit && (
+                  <div className="mt-4 p-4 bg-blue-50 rounded-lg">
+                    <h4 className="font-medium text-blue-900 mb-2">Server Rate Limiting</h4>
+                    <p className="text-sm text-blue-800">
+                      {rateLimits.serverRateLimit.description}
+                    </p>
+                    <p className="text-sm text-blue-800 mt-1">
+                      Cooldown: {rateLimits.serverRateLimit.secondsBetweenRequests} seconds between requests
+                    </p>
+                  </div>
+                )}
+              </div>
+
               {/* Service Endpoints */}
               <div className="mt-8 bg-white rounded-lg shadow-sm p-6">
                 <h3 className="text-xl font-semibold text-gray-900 mb-4">Service Endpoints</h3>
@@ -260,6 +420,8 @@ export default function MonitoringPage() {
                     <h4 className="font-medium text-gray-900">Backend API</h4>
                     <p className="text-sm text-gray-600">http://localhost:3001/api</p>
                     <p className="text-sm text-gray-600">http://localhost:3001/api/health</p>
+                    <p className="text-sm text-gray-600">http://localhost:3001/api/ai/health</p>
+                    <p className="text-sm text-gray-600">http://localhost:3001/api/ai/rate-limits</p>
                   </div>
                 </div>
               </div>
