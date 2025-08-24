@@ -23,15 +23,26 @@ interface ExecutionStepProps {
   updateSession?: (updates: Partial<WizardSession>) => Promise<WizardSession | null>;
 }
 
+interface ValidationStatus {
+  coverage: number; // Percentage of rules that can be pre-validated
+  supportedRules: number;
+  totalRules: number;
+  preValidationPassed: boolean;
+  violationCount: number;
+  warningCount: number;
+  successRate?: number;
+}
+
 interface ObjectProgress {
   name: string;
-  status: 'pending' | 'generating' | 'loading' | 'completed' | 'error';
+  status: 'pending' | 'pre-validating' | 'generating' | 'loading' | 'completed' | 'error';
   generated: number;
   loaded: number;
   total: number;
   startTime?: Date;
   endTime?: Date;
   error?: string;
+  validation?: ValidationStatus;
 }
 
 interface ExecutionProgress {
@@ -233,11 +244,24 @@ export default function ExecutionStep({
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending': return 'text-gray-500 bg-gray-100';
+      case 'pre-validating': return 'text-purple-500 bg-purple-100';
       case 'generating': return 'text-blue-500 bg-blue-100';
       case 'loading': return 'text-yellow-500 bg-yellow-100';
       case 'completed': return 'text-green-500 bg-green-100';
       case 'error': return 'text-red-500 bg-red-100';
       default: return 'text-gray-500 bg-gray-100';
+    }
+  };
+
+  const getValidationStatusIcon = (validation?: ValidationStatus) => {
+    if (!validation) return null;
+    
+    if (validation.preValidationPassed) {
+      return <CheckCircleIcon className="h-4 w-4 text-green-500" />;
+    } else if (validation.violationCount > 0) {
+      return <ExclamationCircleIcon className="h-4 w-4 text-red-500" />;
+    } else {
+      return <ClockIcon className="h-4 w-4 text-yellow-500" />;
     }
   };
 
@@ -438,13 +462,53 @@ export default function ExecutionStep({
                 <div className="flex items-center">
                   <h3 className="font-medium text-gray-900 mr-3">{objProgress.name}</h3>
                   <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(objProgress.status)}`}>
-                    {objProgress.status}
+                    {objProgress.status === 'pre-validating' ? 'validating' : objProgress.status}
                   </span>
+                  {objProgress.validation && (
+                    <div className="ml-2 flex items-center">
+                      {getValidationStatusIcon(objProgress.validation)}
+                    </div>
+                  )}
                 </div>
                 <div className="text-sm text-gray-600">
                   {objProgress.loaded}/{objProgress.total} records
                 </div>
               </div>
+              
+              {/* Validation Status Section */}
+              {objProgress.validation && (
+                <div className="mb-3 p-2 bg-gray-50 rounded-md">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-medium text-gray-700">Validation Status</span>
+                    {objProgress.validation.successRate !== undefined && (
+                      <span className={`text-xs font-medium ${
+                        objProgress.validation.successRate >= 95 ? 'text-green-600' :
+                        objProgress.validation.successRate >= 85 ? 'text-yellow-600' : 'text-red-600'
+                      }`}>
+                        {objProgress.validation.successRate.toFixed(1)}% success rate
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center text-xs text-gray-600 space-x-4">
+                    <span>
+                      Coverage: {objProgress.validation.coverage.toFixed(1)}%
+                    </span>
+                    <span>
+                      Rules: {objProgress.validation.supportedRules}/{objProgress.validation.totalRules}
+                    </span>
+                    {objProgress.validation.violationCount > 0 && (
+                      <span className="text-red-600 font-medium">
+                        {objProgress.validation.violationCount} issues
+                      </span>
+                    )}
+                    {objProgress.validation.warningCount > 0 && (
+                      <span className="text-yellow-600">
+                        {objProgress.validation.warningCount} warnings
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
               
               <div className="w-full bg-gray-200 rounded-full h-2">
                 <div 
@@ -452,6 +516,7 @@ export default function ExecutionStep({
                     objProgress.loaded === 0 && objProgress.status === 'completed' ? 'bg-red-600' : 
                     objProgress.status === 'error' ? 'bg-red-600' :
                     objProgress.loaded < objProgress.total && objProgress.status === 'completed' ? 'bg-amber-600' :
+                    objProgress.status === 'pre-validating' ? 'bg-purple-600' :
                     'bg-green-600'
                   }`}
                   style={{ width: `${objProgress.total > 0 ? Math.max(5, (objProgress.loaded / objProgress.total) * 100) : 0}%` }}

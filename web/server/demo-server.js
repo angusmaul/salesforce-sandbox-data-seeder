@@ -22,15 +22,17 @@ const path = require('path');
 const fetch = globalThis.fetch || require('node-fetch');
 
 // Validation Engine imports (TypeScript compiled to JS)
-let ValidationEngine, AIService, EnhancedDiscoveryService;
+let ValidationEngine, AIService, EnhancedDiscoveryService, PreValidator;
 try {
   // These will be compiled TypeScript modules
   const { ValidationEngine: VE } = require('./services/validation-engine');
   const { AIService: AIS } = require('./services/ai-service');
   const { EnhancedDiscoveryService: EDS } = require('./services/enhanced-discovery');
+  const { PreValidator: PV } = require('./services/pre-validator');
   ValidationEngine = VE;
   AIService = AIS;
   EnhancedDiscoveryService = EDS;
+  PreValidator = PV;
 } catch (error) {
   console.warn('⚠️ Validation Engine modules not available (may need compilation):', error.message);
   // Graceful fallback - validation engine features will be disabled
@@ -116,6 +118,7 @@ console.log(`💾 Loaded ${Object.keys(sessions.data).length} existing sessions 
 let aiService = null;
 let validationEngine = null;
 let enhancedDiscovery = null;
+let preValidator = null;
 
 // Initialize AI Service for chat functionality (independent of validation engine)
 try {
@@ -140,6 +143,16 @@ function initializeValidationEngine() {
     console.log('✅ Validation Engine infrastructure ready');
   } catch (error) {
     console.error('❌ Failed to initialize Validation Engine:', error.message);
+  }
+
+  // Initialize PreValidator
+  try {
+    if (PreValidator) {
+      preValidator = new PreValidator();
+      console.log('✅ PreValidator initialized successfully');
+    }
+  } catch (error) {
+    console.error('❌ Failed to initialize PreValidator:', error.message);
   }
 }
 
@@ -3129,76 +3142,186 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
     records.push(record);
   }
   
-  // Enhanced data generation with validation engine (if available)
-  if (ValidationEngine && EnhancedDiscoveryService && records.length > 0) {
+  // Enhanced pre-validation and data generation with validation engine (if available)
+  if (records.length > 0) {
     try {
-      const sessionServices = await initializeSessionValidationEngine(sessionId, conn);
-      if (sessionServices) {
-        console.log(`🔍 Applying validation engine to ${records.length} ${objectName} records...`);
-        io.to(sessionId).emit('execution-log', `🧠 Analyzing validation rules for ${objectName}...`);
-        
-        // Pre-validate and enhance records using validation engine
-        const validationRequest = {
-          objectName,
-          data: records,
-          skipAIAnalysis: records.length > 50, // Skip AI for large batches to avoid rate limits
-          includeWarnings: true,
-          validationLevel: 'standard'
-        };
+      // Step 1: Get validation rules for the object
+      const objectAnalysis = session?.fieldAnalysis?.[objectName];
+      const validationRules = objectAnalysis?.validationRules || [];
+      const fieldMetadata = {};
+      
+      // Build field metadata for pre-validation
+      if (objectAnalysis?.fields) {
+        objectAnalysis.fields.forEach(field => {
+          fieldMetadata[field.name] = {
+            name: field.name,
+            type: field.type,
+            required: field.required,
+            length: field.length,
+            precision: field.precision,
+            scale: field.scale,
+            picklistValues: field.picklistValues,
+            referenceTo: field.referenceTo
+          };
+        });
+      }
 
-        const validationResult = await sessionServices.validationEngine.validateData(validationRequest);
+      // Step 2: Pre-validate using new PreValidator if available
+      if (preValidator && validationRules.length > 0) {
+        console.log(`🔍 Pre-validating ${records.length} ${objectName} records against ${validationRules.length} validation rules...`);
+        io.to(sessionId).emit('execution-log', `🔍 Pre-validating ${objectName} records against validation rules...`);
         
-        if (validationResult.invalidRecords > 0) {
-          console.log(`⚠️ Validation found ${validationResult.invalidRecords} invalid records, attempting fixes...`);
-          io.to(sessionId).emit('execution-log', `🔧 Fixing ${validationResult.invalidRecords} validation issues...`);
+        // Choose optimization strategy based on dataset size
+        const useOptimizedValidation = records.length > 500;
+        let preValidationResult;
+        
+        if (useOptimizedValidation) {
+          console.log(`📊 Using optimized validation for large dataset (${records.length} records)`);
+          io.to(sessionId).emit('execution-log', `📊 Using optimized validation for ${records.length} records (sampling mode)`);
           
-          // Apply suggested fixes to invalid records
+          preValidationResult = await preValidator.preValidateLargeDataset(
+            records,
+            validationRules,
+            fieldMetadata,
+            {
+              includeWarnings: true,
+              includeSuggestions: false, // Skip suggestions for large datasets
+              maxRecords: Math.min(records.length, 5000),
+              timeoutMs: 60000,
+              skipUnsupportedRules: true,
+              optimizeForPerformance: true
+            }
+          );
+        } else {
+          preValidationResult = await preValidator.preValidateRecords(
+            records,
+            validationRules,
+            fieldMetadata,
+            {
+              includeWarnings: true,
+              includeSuggestions: true,
+              maxRecords: Math.min(records.length, 1000),
+              timeoutMs: 30000,
+              skipUnsupportedRules: true,
+              optimizeForPerformance: records.length > 100
+            }
+          );
+        }
+
+        // Report pre-validation coverage
+        const coverage = await preValidator.getValidationCoverage(validationRules);
+        console.log(`📊 Validation coverage: ${coverage.coverage.toFixed(1)}% (${coverage.supported}/${coverage.total} rules)`);
+        io.to(sessionId).emit('execution-log', `📊 Validation coverage: ${coverage.coverage.toFixed(1)}% (${coverage.supported}/${coverage.total} rules supported)`);
+
+        // Apply fixes for violations
+        if (preValidationResult.violations.length > 0) {
+          const errorViolations = preValidationResult.violations.filter(v => v.severity === 'error');
+          console.log(`⚠️ Pre-validation found ${errorViolations.length} validation issues, applying fixes...`);
+          io.to(sessionId).emit('execution-log', `🔧 Fixing ${errorViolations.length} pre-validation issues...`);
+          
+          // Apply suggestions with high confidence
           const fixedRecords = [];
           for (let i = 0; i < records.length; i++) {
-            const recordResult = validationResult.results[i];
             let fixedRecord = { ...records[i] };
             
-            if (!recordResult.isValid && recordResult.suggestedFixes.length > 0) {
-              // Apply fixes with high confidence
-              recordResult.suggestedFixes
-                .filter(fix => fix.confidence >= 0.7)
-                .forEach(fix => {
-                  if (fix.suggestedValue !== null && fix.suggestedValue !== undefined) {
-                    fixedRecord[fix.field] = fix.suggestedValue;
-                    console.log(`🔧 Fixed ${objectName}[${i}].${fix.field}: ${fix.reason}`);
-                  }
-                });
+            // Find suggestions for this record
+            const recordSuggestions = preValidationResult.suggestions.filter(s => 
+              // Suggestions don't have recordIndex, so we apply all high-confidence suggestions
+              s.confidence >= 0.7
+            );
+            
+            for (const suggestion of recordSuggestions) {
+              if (fixedRecord[suggestion.field] === suggestion.currentValue) {
+                fixedRecord[suggestion.field] = suggestion.suggestedValue;
+                console.log(`🔧 Pre-validation fix: ${objectName}[${i}].${suggestion.field} = ${suggestion.suggestedValue} (${suggestion.reason})`);
+              }
             }
             
             fixedRecords.push(fixedRecord);
           }
           
-          // Update records with fixes
+          // Update records with pre-validation fixes
           records.splice(0, records.length, ...fixedRecords);
           
-          // Report validation results
-          const successRate = ((validationResult.validRecords / validationResult.totalRecords) * 100).toFixed(1);
-          io.to(sessionId).emit('execution-log', `✅ Validation complete: ${successRate}% success rate (${validationResult.validRecords}/${validationResult.totalRecords})`);
+          // Re-validate after fixes
+          const revalidationResult = await preValidator.preValidateRecords(
+            records,
+            validationRules,
+            fieldMetadata,
+            { includeWarnings: false, includeSuggestions: false }
+          );
           
-          if (validationResult.recommendations.length > 0) {
-            io.to(sessionId).emit('execution-log', `💡 Recommendations: ${validationResult.recommendations.join(', ')}`);
+          const successRate = revalidationResult.isValid ? 100 : 
+            ((records.length - revalidationResult.violations.filter(v => v.severity === 'error').length) / records.length * 100);
+          
+          io.to(sessionId).emit('execution-log', `✅ Pre-validation complete: ${successRate.toFixed(1)}% estimated success rate`);
+          
+          if (revalidationResult.violations.length > 0) {
+            const remainingViolations = revalidationResult.violations.filter(v => v.severity === 'error').length;
+            io.to(sessionId).emit('execution-log', `⚠️ ${remainingViolations} validation issues remain (may need manual review)`);
           }
         } else {
-          console.log(`✅ All ${records.length} ${objectName} records passed validation`);
-          io.to(sessionId).emit('execution-log', `✅ All ${objectName} records passed validation checks`);
+          console.log(`✅ All ${records.length} ${objectName} records passed pre-validation`);
+          io.to(sessionId).emit('execution-log', `✅ All ${objectName} records passed pre-validation checks`);
         }
+
+        // Report warnings about unsupported rules
+        if (preValidationResult.warnings.length > 0) {
+          const unsupportedWarnings = preValidationResult.warnings.filter(w => w.type === 'unsupported_formula');
+          if (unsupportedWarnings.length > 0) {
+            io.to(sessionId).emit('execution-log', `⚠️ ${unsupportedWarnings.length} validation rules could not be pre-validated (complex formulas)`);
+          }
+        }
+
+        // Log performance metrics
+        console.log(`⚱️ Pre-validation performance: ${preValidationResult.performance.evaluationTime}ms for ${preValidationResult.performance.recordsProcessed} records`);
         
-        // Clean up validation engine resources
-        sessionServices.validationEngine.destroy();
-        sessionServices.enhancedDiscovery.destroy();
-        
-      } else {
-        console.log(`⚠️ Validation engine not available for session ${sessionId}`);
+      } else if (validationRules.length > 0) {
+        io.to(sessionId).emit('execution-log', `⚠️ PreValidator not available - skipping pre-validation of ${validationRules.length} rules`);
       }
-    } catch (validationError) {
-      console.warn(`⚠️ Validation engine failed for ${objectName}:`, validationError.message);
-      io.to(sessionId).emit('execution-log', `⚠️ Validation analysis failed: ${validationError.message}`);
-      // Continue without validation enhancement
+
+      // Step 3: Fall back to existing validation engine if available and needed
+      if (ValidationEngine && EnhancedDiscoveryService) {
+        try {
+          const sessionServices = await initializeSessionValidationEngine(sessionId, conn);
+          if (sessionServices) {
+            console.log(`🔍 Applying validation engine to ${records.length} ${objectName} records...`);
+            io.to(sessionId).emit('execution-log', `🧠 Running additional validation analysis for ${objectName}...`);
+            
+            // Use existing validation engine for additional checks
+            const validationRequest = {
+              objectName,
+              data: records,
+              skipAIAnalysis: records.length > 50, // Skip AI for large batches to avoid rate limits
+              includeWarnings: true,
+              validationLevel: 'standard'
+            };
+
+            const validationResult = await sessionServices.validationEngine.validateData(validationRequest);
+            
+            if (validationResult.invalidRecords > 0) {
+              console.log(`⚠️ Additional validation found ${validationResult.invalidRecords} issues`);
+              io.to(sessionId).emit('execution-log', `⚠️ Additional validation found ${validationResult.invalidRecords} potential issues`);
+              
+              if (validationResult.recommendations.length > 0) {
+                io.to(sessionId).emit('execution-log', `💡 Recommendations: ${validationResult.recommendations.join(', ')}`);
+              }
+            }
+            
+            // Clean up validation engine resources
+            sessionServices.validationEngine.destroy();
+            sessionServices.enhancedDiscovery.destroy();
+          }
+        } catch (validationError) {
+          console.warn(`⚠️ Additional validation failed for ${objectName}:`, validationError.message);
+          // Continue - pre-validation already handled the critical checks
+        }
+      }
+      
+    } catch (preValidationError) {
+      console.warn(`⚠️ Pre-validation failed for ${objectName}:`, preValidationError.message);
+      io.to(sessionId).emit('execution-log', `⚠️ Pre-validation failed: ${preValidationError.message}`);
+      // Continue without pre-validation
     }
   }
   
@@ -5029,32 +5152,217 @@ app.get('/api/validation/metrics/:sessionId', async (req, res) => {
   try {
     const sessionId = req.params.sessionId;
     
-    if (!aiService) {
-      return res.json({
-        success: true,
-        data: {
-          aiService: null,
-          validationEngine: 'not_available'
-        }
-      });
+    const responseData = {};
+    
+    // Get AI Service metrics if available
+    if (aiService) {
+      const metrics = aiService.getUsageStats();
+      const health = aiService.getHealthStatus();
+      responseData.aiService = {
+        usage: metrics,
+        health: health
+      };
+    } else {
+      responseData.aiService = null;
     }
     
-    const metrics = aiService.getUsageStats();
-    const health = aiService.getHealthStatus();
+    // Get PreValidator metrics if available
+    if (preValidator) {
+      responseData.preValidator = preValidator.getPerformanceMetrics();
+      responseData.validationEngine = 'available';
+    } else {
+      responseData.preValidator = null;
+      responseData.validationEngine = 'not_available';
+    }
     
     res.json({
       success: true,
-      data: {
-        aiService: {
-          usage: metrics,
-          health: health
-        },
-        validationEngine: 'available'
-      }
+      data: responseData
     });
     
   } catch (error) {
     console.error('Metrics error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Get validation coverage for an object
+app.get('/api/validation/coverage/:sessionId/:objectName', async (req, res) => {
+  try {
+    const { sessionId, objectName } = req.params;
+    
+    if (!preValidator) {
+      return res.status(503).json({
+        success: false,
+        error: 'PreValidator not available'
+      });
+    }
+
+    const session = sessions.get(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found'
+      });
+    }
+
+    const objectAnalysis = session.fieldAnalysis?.[objectName];
+    const validationRules = objectAnalysis?.validationRules || [];
+
+    const coverage = await preValidator.getValidationCoverage(validationRules);
+
+    res.json({
+      success: true,
+      data: {
+        objectName,
+        coverage,
+        totalRules: validationRules.length
+      }
+    });
+  } catch (error) {
+    console.error('Validation coverage error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Pre-validate sample records
+app.post('/api/validation/pre-validate-sample/:sessionId/:objectName', async (req, res) => {
+  try {
+    const { sessionId, objectName } = req.params;
+    const { records, options = {} } = req.body;
+    
+    if (!preValidator) {
+      return res.status(503).json({
+        success: false,
+        error: 'PreValidator not available'
+      });
+    }
+
+    const session = sessions.get(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found'
+      });
+    }
+
+    // Get validation rules and field metadata
+    const objectAnalysis = session.fieldAnalysis?.[objectName];
+    const validationRules = objectAnalysis?.validationRules || [];
+    const fieldMetadata = {};
+    
+    if (objectAnalysis?.fields) {
+      objectAnalysis.fields.forEach(field => {
+        fieldMetadata[field.name] = {
+          name: field.name,
+          type: field.type,
+          required: field.required,
+          length: field.length,
+          precision: field.precision,
+          scale: field.scale,
+          picklistValues: field.picklistValues,
+          referenceTo: field.referenceTo
+        };
+      });
+    }
+
+    // Pre-validate the records
+    const result = await preValidator.preValidateRecords(
+      records,
+      validationRules,
+      fieldMetadata,
+      {
+        includeWarnings: true,
+        includeSuggestions: true,
+        maxRecords: 100,
+        timeoutMs: 10000,
+        skipUnsupportedRules: true,
+        ...options
+      }
+    );
+
+    res.json({
+      success: true,
+      data: {
+        validation: result,
+        objectName,
+        recordCount: records.length,
+        ruleCount: validationRules.length
+      }
+    });
+  } catch (error) {
+    console.error('Pre-validation sample error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Validate generation pattern for pre-validation assessment
+app.post('/api/validation/validate-pattern/:sessionId/:objectName', async (req, res) => {
+  try {
+    const { sessionId, objectName } = req.params;
+    const { generationPattern } = req.body;
+    
+    if (!preValidator) {
+      return res.status(503).json({
+        success: false,
+        error: 'PreValidator not available'
+      });
+    }
+
+    const session = sessions.get(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found'
+      });
+    }
+
+    const objectAnalysis = session.fieldAnalysis?.[objectName];
+    const validationRules = objectAnalysis?.validationRules || [];
+    const fieldMetadata = {};
+    
+    if (objectAnalysis?.fields) {
+      objectAnalysis.fields.forEach(field => {
+        fieldMetadata[field.name] = {
+          name: field.name,
+          type: field.type,
+          required: field.required,
+          length: field.length,
+          precision: field.precision,
+          scale: field.scale,
+          picklistValues: field.picklistValues,
+          referenceTo: field.referenceTo
+        };
+      });
+    }
+
+    // Validate the generation pattern
+    const patternValidation = await preValidator.validateGenerationPattern(
+      objectName,
+      generationPattern,
+      validationRules,
+      fieldMetadata
+    );
+
+    res.json({
+      success: true,
+      data: {
+        objectName,
+        patternValidation,
+        ruleCount: validationRules.length
+      }
+    });
+  } catch (error) {
+    console.error('Pattern validation error:', error);
     res.status(500).json({
       success: false,
       error: error.message

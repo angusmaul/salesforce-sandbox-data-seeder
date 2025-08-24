@@ -7,10 +7,13 @@ module.exports = {
   roots: ['<rootDir>/server', '<rootDir>/tests'],
   testMatch: [
     '**/__tests__/**/*.ts',
-    '**/?(*.)+(spec|test).ts'
+    '**/__tests__/**/*.js',
+    '**/?(*.)+(spec|test).ts',
+    '**/?(*.)+(spec|test).js'
   ],
   transform: {
-    '^.+\\.ts$': 'ts-jest'
+    '^.+\\.ts$': 'ts-jest',
+    '^.+\\.js$': 'babel-jest'
   },
   collectCoverageFrom: [
     'server/**/*.ts',
