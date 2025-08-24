@@ -2034,7 +2034,7 @@ app.get('/api/results/:sessionId', async (req, res) => {
 app.post('/api/execution/start/:sessionId', async (req, res) => {
   try {
     const sessionId = req.params.sessionId;
-    const { configuration, globalSettings, fieldAnalysis } = req.body;
+    const { configuration, globalSettings, fieldAnalysis, aiSettings } = req.body;
     
     if (!configuration || !fieldAnalysis) {
       return res.status(400).json({
@@ -2054,9 +2054,23 @@ app.post('/api/execution/start/:sessionId', async (req, res) => {
     }
     
     console.log(`🚀 Starting data generation execution for session: ${sessionId}`);
+    console.log(`🎯 AI Settings:`, aiSettings || 'Not configured');
+    
+    if (aiSettings?.suggestionsEnabled) {
+      console.log(`🤖 AI-POWERED DATA GENERATION ENABLED`);
+      console.log(`   Business Scenario: ${aiSettings.businessScenario || 'general'}`);
+      console.log(`   Industry Context: ${aiSettings.industryContext || 'technology'}`);
+      console.log(`   Suggestion Mode: ${aiSettings.suggestionMode || 'balanced'}`);
+    } else {
+      console.log(`🔧 Using standard data generation (AI suggestions disabled)`);
+    }
+    
+    // Update session with aiSettings
+    session.aiSettings = aiSettings;
+    sessions.set(sessionId, session);
     
     // Start execution process asynchronously
-    startDataGeneration(sessionId, configuration, globalSettings, fieldAnalysis, session.connectionInfo);
+    startDataGeneration(sessionId, configuration, globalSettings, fieldAnalysis, aiSettings, session.connectionInfo);
     
     res.json({
       success: true,
@@ -2324,7 +2338,7 @@ async function createStandardPricebookEntries(productIds, standardPricebookId, f
 }
 
 // Data generation process
-async function startDataGeneration(sessionId, configuration, globalSettings, fieldAnalysis, connectionInfo) {
+async function startDataGeneration(sessionId, configuration, globalSettings, fieldAnalysis, aiSettings, connectionInfo) {
   const startTime = new Date();
   const loadSessionId = `load_${startTime.toISOString().replace(/[:.]/g, '-')}_${Math.random().toString(36).substr(2, 6)}`;
   
@@ -3026,8 +3040,21 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
   for (let i = 0; i < recordCount; i++) {
     const record = {};
     
-    // Create record context for tracking field relationships (e.g., country-state alignment)
-    const recordContext = { recordIndex: i, selectedCountries: {} };
+    // Create enhanced record context for AI suggestions and field relationships
+    const recordContext = { 
+      recordIndex: i,
+      totalRecords: recordCount,
+      objectName: objectName,
+      selectedCountries: {},
+      existingValues: {},
+      businessContext: aiSettings ? {
+        scenario: aiSettings.businessScenario || 'general',
+        industry: aiSettings.industryContext || 'technology',
+        mode: aiSettings.suggestionMode || 'balanced'
+      } : null,
+      // Track generated values for relationship consistency
+      generatedValues: {}
+    };
     
     // Sort required fields to ensure CountryCode fields are processed before StateCode fields
     const sortedRequiredFields = [...requiredFields].sort((a, b) => {
@@ -3047,6 +3074,9 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
       const value = generateFieldValueWithContext(field, i, objectName, sessionId, recordContext);
       if (value !== null && value !== undefined) {
         record[field.name] = value;
+        // Track generated values for AI relationship consistency
+        recordContext.existingValues[field.name] = value;
+        recordContext.generatedValues[field.name] = value;
       }
     });
     
@@ -3127,6 +3157,9 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
             if (countryValue !== null && countryValue !== undefined) {
               record[countryField.name] = countryValue;
               selectedFields.add(countryField.name);
+              // Track generated values for AI relationship consistency
+              recordContext.existingValues[countryField.name] = countryValue;
+              recordContext.generatedValues[countryField.name] = countryValue;
               console.log(`🔗 Auto-selected country field ${countryField.name} for state field ${field.name}`);
             }
           }
@@ -3138,6 +3171,9 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
         if (value !== null && value !== undefined) {
           record[field.name] = value;
           selectedFields.add(field.name);
+          // Track generated values for AI relationship consistency
+          recordContext.existingValues[field.name] = value;
+          recordContext.generatedValues[field.name] = value;
         }
       }
     });
@@ -4072,10 +4108,62 @@ function generateFieldValue(field, index, objectName = '', sessionId = null) {
   const session = sessions.get(sessionId);
   const stateCountryMappings = session?.stateCountryMappings || {};
   
-  // Note: This function is kept for backward compatibility
-  // Use generateFieldValueWithContext for new implementations
+  // 🤖 AI-POWERED FIELD GENERATION
+  // Check if AI suggestions are enabled for this session
+  if (session?.aiSettings?.suggestionsEnabled && suggestionEngine) {
+    try {
+      console.log(`🎯 Generating AI suggestion for ${objectName}.${field.name} (${field.type})`);
+      
+      // Prepare context for AI suggestion
+      const suggestionContext = {
+        objectName,
+        fieldName: field.name,
+        fieldType: field.type,
+        fieldMetadata: {
+          length: field.length,
+          precision: field.precision,
+          scale: field.scale,
+          picklistValues: field.picklistValues,
+          required: field.required || false,
+          nillable: field.nillable
+        },
+        businessContext: {
+          scenario: session.aiSettings.businessScenario || 'general',
+          industry: session.aiSettings.industryContext || 'technology',
+          recordIndex: index,
+          totalRecords: recordContext?.totalRecords || 100
+        },
+        recordContext,
+        existingValues: recordContext?.existingValues || {}
+      };
+      
+      // Generate AI suggestion
+      const aiSuggestion = await suggestionEngine.generateFieldSuggestion(suggestionContext);
+      
+      if (aiSuggestion && aiSuggestion.success && aiSuggestion.suggestion?.value !== null) {
+        console.log(`✨ AI suggested: ${aiSuggestion.suggestion.value} (confidence: ${aiSuggestion.suggestion.confidence})`);
+        
+        // Apply field constraints to AI suggestion
+        let aiValue = aiSuggestion.suggestion.value;
+        
+        // Handle string length constraints
+        if ((field.type === 'string' || field.type === 'textarea') && field.length) {
+          if (typeof aiValue === 'string' && aiValue.length > field.length) {
+            aiValue = aiValue.substring(0, field.length);
+          }
+        }
+        
+        return aiValue;
+      } else {
+        console.log(`⚠️ AI suggestion failed for ${objectName}.${field.name}, falling back to standard generation`);
+      }
+    } catch (error) {
+      console.error(`❌ AI suggestion error for ${objectName}.${field.name}:`, error.message);
+      // Fall through to standard generation
+    }
+  }
   
-  // Use the new metadata-driven generator (without record context for backward compatibility)
+  // Use the standard metadata-driven generator as fallback
   const value = FieldDataGenerator.generateValue(field, index, objectName, {
     referenceId: null, // Will be handled by relationship logic
     stateCountryMappings: stateCountryMappings

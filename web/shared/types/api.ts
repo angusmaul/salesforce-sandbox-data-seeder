@@ -21,6 +21,8 @@ export interface WizardSession {
   generationPlan?: GenerationPlan[];
   executionResults?: SeedResult[];
   loadSessionId?: string;
+  // AI Settings for suggestions and context-aware generation
+  aiSettings?: AISettings;
   // Enhanced discovery fields
   enhancedDiscovery?: boolean;
   aiSchemaSummary?: any;
@@ -52,6 +54,15 @@ export interface DataGenerationPreferences {
   customStateMapping?: { [countryCode: string]: string[] };
   useOrgPicklists?: boolean;
   savedAt?: Date;
+}
+
+export interface AISettings {
+  suggestionsEnabled: boolean;
+  businessScenario?: string;
+  industryContext?: string;
+  suggestionMode?: 'enhanced' | 'balanced' | 'minimal';
+  useBusinessContext?: boolean;
+  customInstructions?: string;
 }
 
 export interface CountryMetadata {

@@ -9,7 +9,6 @@ import {
   XCircleIcon,
   ArrowTrendingUpIcon,
   ArrowTrendingDownIcon,
-  CacheIcon,
   BoltIcon,
   ShieldCheckIcon
 } from '@heroicons/react/24/outline';
@@ -229,7 +228,7 @@ export default function PerformanceDashboard() {
         {/* Cache Hit Rate */}
         <div className="bg-white rounded-lg shadow-sm p-6">
           <div className="flex items-center">
-            <CacheIcon className="h-8 w-8 text-blue-600" />
+            <BoltIcon className="h-8 w-8 text-blue-600" />
             <div className="ml-3">
               <p className="text-sm font-medium text-gray-600">Cache Hit Rate</p>
               <p className="text-2xl font-bold text-gray-900">
