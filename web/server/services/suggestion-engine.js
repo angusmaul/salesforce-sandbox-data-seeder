@@ -477,6 +477,72 @@ Format as JSON array with objects containing:
             Type: { valueTypes: ['Commercial', 'Retail'], businessRules: ['regulated'], relationships: [] }
           }
         }
+      },
+      {
+        name: 'Healthcare Organization',
+        description: 'Hospital, clinic, or healthcare services provider',
+        industry: 'Healthcare',
+        dataPatterns: {
+          Account: {
+            Name: { valueTypes: ['medical'], businessRules: ['healthcare_focused'], relationships: ['regulatory'] },
+            Type: { valueTypes: ['Hospital', 'Clinic', 'Provider'], businessRules: ['hipaa_compliant'], relationships: [] }
+          }
+        }
+      },
+      {
+        name: 'E-commerce Retailer',
+        description: 'Online retail company with consumer and B2B sales',
+        industry: 'Retail',
+        dataPatterns: {
+          Account: {
+            Name: { valueTypes: ['retail'], businessRules: ['commerce_focused'], relationships: ['customer_focused'] },
+            Type: { valueTypes: ['Customer', 'Vendor', 'Partner'], businessRules: ['commerce'], relationships: [] }
+          }
+        }
+      },
+      {
+        name: 'Real Estate Agency',
+        description: 'Real estate brokerage with residential and commercial properties',
+        industry: 'Real Estate',
+        dataPatterns: {
+          Account: {
+            Name: { valueTypes: ['realestate'], businessRules: ['property_focused'], relationships: ['location_based'] },
+            Type: { valueTypes: ['Buyer', 'Seller', 'Investor'], businessRules: ['realestate'], relationships: [] }
+          }
+        }
+      },
+      {
+        name: 'Education Institution',
+        description: 'University, college, or educational services provider',
+        industry: 'Education',
+        dataPatterns: {
+          Account: {
+            Name: { valueTypes: ['education'], businessRules: ['academic_focused'], relationships: ['academic'] },
+            Type: { valueTypes: ['Student', 'Faculty', 'Institution'], businessRules: ['educational'], relationships: [] }
+          }
+        }
+      },
+      {
+        name: 'Non-Profit Organization',
+        description: 'Charitable organization or foundation with donors and beneficiaries',
+        industry: 'Non-Profit',
+        dataPatterns: {
+          Account: {
+            Name: { valueTypes: ['nonprofit'], businessRules: ['mission_focused'], relationships: ['community'] },
+            Type: { valueTypes: ['Donor', 'Beneficiary', 'Volunteer'], businessRules: ['nonprofit'], relationships: [] }
+          }
+        }
+      },
+      {
+        name: 'Consulting Services',
+        description: 'Professional services firm with enterprise clients',
+        industry: 'Professional Services',
+        dataPatterns: {
+          Account: {
+            Name: { valueTypes: ['consulting'], businessRules: ['service_focused'], relationships: ['client_based'] },
+            Type: { valueTypes: ['Client', 'Prospect', 'Partner'], businessRules: ['professional'], relationships: [] }
+          }
+        }
       }
     ];
   }

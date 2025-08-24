@@ -59,6 +59,9 @@ export default function ConfigurationStep({
   const [selectedBusinessScenario, setSelectedBusinessScenario] = useState<string>('');
   const [businessScenarios, setBusinessScenarios] = useState<any[]>([]);
   const [showSuggestionPanel, setShowSuggestionPanel] = useState(false);
+  const [previewSelectedObject, setPreviewSelectedObject] = useState<string>('');
+  const [previewSelectedField, setPreviewSelectedField] = useState<string>('');
+  const [previewSuggestions, setPreviewSuggestions] = useState<any[]>([]);
 
   useEffect(() => {
     // Initialize configurations with smart defaults
@@ -782,9 +785,11 @@ export default function ConfigurationStep({
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                 <select
                   className="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
-                  value=""
+                  value={previewSelectedObject}
                   onChange={(e) => {
-                    // This is just for demo - actual integration happens in generation
+                    setPreviewSelectedObject(e.target.value);
+                    setPreviewSelectedField(''); // Reset field selection
+                    setPreviewSuggestions([]); // Clear suggestions
                   }}
                 >
                   <option value="">Select Object...</option>
@@ -795,25 +800,93 @@ export default function ConfigurationStep({
                 
                 <select
                   className="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
-                  value=""
-                  disabled
+                  value={previewSelectedField}
+                  disabled={!previewSelectedObject}
+                  onChange={(e) => {
+                    setPreviewSelectedField(e.target.value);
+                    setPreviewSuggestions([]); // Clear suggestions
+                  }}
                 >
                   <option value="">Select Field...</option>
+                  {previewSelectedObject && session.fieldAnalysis?.[previewSelectedObject]?.fields && 
+                    session.fieldAnalysis[previewSelectedObject].fields
+                      .filter(field => field.createable && !field.calculated && field.type !== 'reference')
+                      .slice(0, 20) // Limit to first 20 fields for preview
+                      .map(field => (
+                        <option key={field.name} value={field.name}>
+                          {field.name} ({field.type})
+                        </option>
+                      ))
+                  }
                 </select>
                 
                 <button
-                  className="px-4 py-2 bg-gray-300 text-gray-600 rounded-md text-sm cursor-not-allowed"
-                  disabled
+                  className={`px-4 py-2 rounded-md text-sm transition-colors ${
+                    previewSelectedObject && previewSelectedField
+                      ? 'bg-blue-500 text-white hover:bg-blue-600'
+                      : 'bg-gray-300 text-gray-600 cursor-not-allowed'
+                  }`}
+                  disabled={!previewSelectedObject || !previewSelectedField}
+                  onClick={async () => {
+                    if (!previewSelectedObject || !previewSelectedField) return;
+                    
+                    try {
+                      const response = await fetch(`/api/ai/field-suggestions`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          sessionId: session.id,
+                          objectName: previewSelectedObject,
+                          fieldName: previewSelectedField,
+                          businessScenario: selectedBusinessScenario || 'financial-services'
+                        })
+                      });
+                      
+                      const result = await response.json();
+                      if (result.success) {
+                        setPreviewSuggestions(result.data?.suggestions || []);
+                      } else {
+                        toast.error('Failed to generate suggestions: ' + (result.error || 'Unknown error'));
+                      }
+                    } catch (error) {
+                      console.error('Suggestion preview error:', error);
+                      toast.error('Failed to generate suggestions');
+                    }
+                  }}
                 >
                   Generate Suggestions
                 </button>
               </div>
               
-              <div className="text-center text-gray-500 text-sm py-8 border-2 border-dashed border-gray-200 rounded-lg">
-                Select an object and field above to preview AI suggestions
-                <br />
-                <span className="text-xs">Full suggestions will be available during data generation</span>
-              </div>
+              {previewSuggestions.length > 0 ? (
+                <div className="border border-gray-200 rounded-lg p-4">
+                  <h4 className="font-medium text-gray-900 mb-3">
+                    AI Suggestions for {previewSelectedObject}.{previewSelectedField}:
+                  </h4>
+                  <div className="space-y-2">
+                    {previewSuggestions.slice(0, 5).map((suggestion, index) => (
+                      <div key={index} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                        <span className="text-sm font-mono">{suggestion.value}</span>
+                        <span className="text-xs text-gray-500">
+                          {Math.round(suggestion.confidence * 100)}% confidence
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    Showing top 5 suggestions. Full context-aware suggestions will be generated during data creation.
+                  </p>
+                </div>
+              ) : (
+                <div className="text-center text-gray-500 text-sm py-8 border-2 border-dashed border-gray-200 rounded-lg">
+                  {previewSelectedObject && previewSelectedField 
+                    ? 'Click "Generate Suggestions" to see AI-powered field suggestions'
+                    : 'Select an object and field above to preview AI suggestions'
+                  }
+                  <br />
+                  <span className="text-xs">Full suggestions will be available during data generation</span>
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -52,7 +52,9 @@
       "Bash(node:*)",
       "Bash(lsof:*)",
       "Bash(ss:*)",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "Read(//home/tim/**)",
+      "Bash(ccpm create:*)"
     ],
     "additionalDirectories": [
       "/tmp"
