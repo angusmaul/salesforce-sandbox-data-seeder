@@ -12,6 +12,8 @@ const { faker } = require('@faker-js/faker');
 const { FieldDataGenerator, SALESFORCE_FIELD_TYPES } = require('./lib/salesforce-field-types');
 const { getCachedMapping, getRandomStateForCountry } = require('./lib/picklist-decoder');
 const { ConstraintSolver } = require('./lib/constraint-solver');
+const { suggestionEngine } = require('./services/suggestion-engine.js');
+const { abTestingService } = require('./services/ab-testing.js');
 const archiver = require('archiver');
 const jsforce = require('jsforce');
 const fs = require('fs');
@@ -4036,6 +4038,67 @@ function generateFieldValueWithContext(field, index, objectName = '', sessionId 
   return value;
 }
 
+/**
+ * Enhanced field value generation with optional AI suggestions
+ * Integrates the suggestion engine for context-aware data generation
+ */
+async function generateFieldValueWithSuggestions(field, index, objectName = '', sessionId = null, recordContext = {}, useSuggestions = false, businessContext = null) {
+  // If suggestions are disabled or not available, use standard generation
+  if (!useSuggestions || !suggestionEngine) {
+    return generateFieldValueWithContext(field, index, objectName, sessionId, recordContext);
+  }
+
+  try {
+    // Get session for additional context
+    const session = sessions.get(sessionId);
+    
+    // Prepare context for AI suggestions
+    const suggestionRequest = {
+      objectName,
+      fieldName: field.name,
+      fieldType: field.type,
+      fieldMetadata: {
+        length: field.length,
+        precision: field.precision,
+        scale: field.scale,
+        picklistValues: field.picklistValues
+      },
+      businessContext: businessContext || session?.businessContext,
+      relationshipContext: {
+        parentRecords: recordContext.parentRecords || [],
+        relatedFields: Object.entries(recordContext).map(([fieldName, value]) => ({
+          fieldName,
+          value
+        }))
+      },
+      validationRules: session?.fieldAnalysis?.[objectName]?.validationRules || [],
+      recordIndex: index
+    };
+
+    // Get AI suggestions
+    const suggestions = await suggestionEngine.generateFieldSuggestions(suggestionRequest);
+    
+    // Use the highest confidence suggestion if available
+    if (suggestions && suggestions.length > 0) {
+      const bestSuggestion = suggestions[0]; // Already sorted by confidence
+      
+      // Log suggestion usage for debugging and metrics
+      console.log(`🤖 AI suggestion for ${objectName}.${field.name}: ${bestSuggestion.value} (confidence: ${bestSuggestion.confidence})`);
+      
+      return bestSuggestion.value;
+    }
+    
+    // Fallback to standard generation if no suggestions
+    return generateFieldValueWithContext(field, index, objectName, sessionId, recordContext);
+    
+  } catch (error) {
+    console.warn(`AI suggestion failed for ${objectName}.${field.name}, using fallback:`, error.message);
+    
+    // Fallback to standard generation on error
+    return generateFieldValueWithContext(field, index, objectName, sessionId, recordContext);
+  }
+}
+
 // Test query endpoint for debugging
 app.post('/api/test/query/:sessionId', async (req, res) => {
   try {
@@ -4408,6 +4471,308 @@ app.get('/api/ai/rate-limits', async (req, res) => {
   } catch (error) {
     res.status(500).json({
       error: error.message
+    });
+  }
+});
+
+// AI Suggestion API Endpoints
+app.post('/api/suggestions/field/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { 
+      objectName, 
+      fieldName, 
+      fieldType, 
+      fieldMetadata,
+      businessContext,
+      relationshipContext,
+      validationRules,
+      recordIndex = 0
+    } = req.body;
+
+    if (!objectName || !fieldName || !fieldType) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: objectName, fieldName, fieldType'
+      });
+    }
+
+    const session = sessions.get(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found'
+      });
+    }
+
+    const suggestions = await suggestionEngine.generateFieldSuggestions({
+      objectName,
+      fieldName,
+      fieldType,
+      fieldMetadata,
+      businessContext,
+      relationshipContext,
+      validationRules,
+      recordIndex
+    });
+
+    res.json({
+      success: true,
+      suggestions,
+      metadata: {
+        sessionId,
+        objectName,
+        fieldName,
+        suggestionsCount: suggestions.length
+      }
+    });
+
+  } catch (error) {
+    console.error('Field suggestion error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to generate field suggestions'
+    });
+  }
+});
+
+app.get('/api/suggestions/business-scenarios', (req, res) => {
+  try {
+    const scenarios = suggestionEngine.getBusinessScenarios();
+    res.json({
+      success: true,
+      scenarios
+    });
+  } catch (error) {
+    console.error('Business scenarios error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch business scenarios'
+    });
+  }
+});
+
+app.post('/api/suggestions/record-interaction', (req, res) => {
+  try {
+    const { suggestionId, action, modifiedValue } = req.body;
+
+    if (!suggestionId || !action) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: suggestionId, action'
+      });
+    }
+
+    if (!['accepted', 'rejected', 'modified'].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid action. Must be: accepted, rejected, or modified'
+      });
+    }
+
+    suggestionEngine.recordSuggestionInteraction(suggestionId, action, modifiedValue);
+
+    res.json({
+      success: true,
+      message: 'Interaction recorded successfully'
+    });
+
+  } catch (error) {
+    console.error('Suggestion interaction error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to record suggestion interaction'
+    });
+  }
+});
+
+app.get('/api/suggestions/metrics', (req, res) => {
+  try {
+    const metrics = suggestionEngine.getMetrics();
+    res.json({
+      success: true,
+      metrics
+    });
+  } catch (error) {
+    console.error('Suggestion metrics error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch suggestion metrics'
+    });
+  }
+});
+
+// A/B Testing API Endpoints
+app.post('/api/ab-testing/assign/:sessionId', (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { experimentId, demographics } = req.body;
+
+    if (!experimentId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameter: experimentId'
+      });
+    }
+
+    const participant = abTestingService.assignToExperiment(sessionId, experimentId, demographics);
+
+    if (!participant) {
+      return res.status(404).json({
+        success: false,
+        error: 'Experiment not found or not running'
+      });
+    }
+
+    res.json({
+      success: true,
+      participant,
+      config: abTestingService.getExperimentConfig(sessionId, experimentId)
+    });
+
+  } catch (error) {
+    console.error('A/B testing assignment error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to assign to experiment'
+    });
+  }
+});
+
+app.get('/api/ab-testing/config/:sessionId/:experimentId', (req, res) => {
+  try {
+    const { sessionId, experimentId } = req.params;
+
+    const config = abTestingService.getExperimentConfig(sessionId, experimentId);
+
+    if (!config) {
+      return res.status(404).json({
+        success: false,
+        error: 'No experiment configuration found for session'
+      });
+    }
+
+    res.json({
+      success: true,
+      config
+    });
+
+  } catch (error) {
+    console.error('A/B testing config error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get experiment configuration'
+    });
+  }
+});
+
+app.post('/api/ab-testing/metric/:sessionId', (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { metricName, value, metadata } = req.body;
+
+    if (!metricName || value === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: metricName, value'
+      });
+    }
+
+    abTestingService.recordMetric(sessionId, metricName, value, metadata);
+
+    res.json({
+      success: true,
+      message: 'Metric recorded successfully'
+    });
+
+  } catch (error) {
+    console.error('A/B testing metric error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to record metric'
+    });
+  }
+});
+
+app.post('/api/ab-testing/interaction', (req, res) => {
+  try {
+    const interaction = req.body;
+
+    if (!interaction.sessionId || !interaction.suggestionId || !interaction.action) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: sessionId, suggestionId, action'
+      });
+    }
+
+    abTestingService.recordSuggestionInteraction(interaction);
+
+    res.json({
+      success: true,
+      message: 'Interaction recorded successfully'
+    });
+
+  } catch (error) {
+    console.error('A/B testing interaction error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to record interaction'
+    });
+  }
+});
+
+app.get('/api/ab-testing/results/:experimentId', (req, res) => {
+  try {
+    const { experimentId } = req.params;
+
+    const results = abTestingService.getExperimentResults(experimentId);
+
+    res.json({
+      success: true,
+      results
+    });
+
+  } catch (error) {
+    console.error('A/B testing results error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get experiment results'
+    });
+  }
+});
+
+app.get('/api/ab-testing/experiments', (req, res) => {
+  try {
+    const experiments = abTestingService.getRunningExperiments();
+
+    res.json({
+      success: true,
+      experiments
+    });
+
+  } catch (error) {
+    console.error('A/B testing experiments error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get experiments'
+    });
+  }
+});
+
+app.get('/api/ab-testing/analytics', (req, res) => {
+  try {
+    const analytics = abTestingService.getSuggestionAnalytics();
+
+    res.json({
+      success: true,
+      analytics
+    });
+
+  } catch (error) {
+    console.error('A/B testing analytics error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get suggestion analytics'
     });
   }
 });

@@ -14,7 +14,8 @@ import {
   ChevronRightIcon,
   XMarkIcon,
   DocumentTextIcon,
-  LinkIcon
+  LinkIcon,
+  LightBulbIcon
 } from '@heroicons/react/24/outline';
 import { WizardSession, WizardStep } from '../../../shared/types/api';
 import { Socket } from 'socket.io-client';
@@ -264,7 +265,7 @@ export default function PreviewStep({
       </div>
 
       {/* Generation Summary */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
         <div className="bg-blue-50 p-4 rounded-lg">
           <div className="flex items-center">
             <CubeIcon className="h-6 w-6 text-blue-600 mr-2" />
@@ -304,7 +305,94 @@ export default function PreviewStep({
             </div>
           </div>
         </div>
+
+        <div className={`p-4 rounded-lg ${session.aiSettings?.suggestionsEnabled ? 'bg-indigo-50' : 'bg-gray-50'}`}>
+          <div className="flex items-center">
+            <LightBulbIcon className={`h-6 w-6 mr-2 ${session.aiSettings?.suggestionsEnabled ? 'text-indigo-600' : 'text-gray-400'}`} />
+            <div>
+              <p className={`text-2xl font-bold ${session.aiSettings?.suggestionsEnabled ? 'text-indigo-900' : 'text-gray-500'}`}>
+                {session.aiSettings?.suggestionsEnabled ? 'ON' : 'OFF'}
+              </p>
+              <p className={`text-sm ${session.aiSettings?.suggestionsEnabled ? 'text-indigo-600' : 'text-gray-500'}`}>
+                AI Suggestions
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
+
+      {/* AI Configuration Details */}
+      {session.aiSettings?.suggestionsEnabled && (
+        <div className="mb-8">
+          <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-lg p-6">
+            <div className="flex items-center mb-4">
+              <LightBulbIcon className="h-6 w-6 text-indigo-600 mr-2" />
+              <h2 className="text-lg font-semibold text-gray-900">AI-Powered Data Generation</h2>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <h3 className="font-medium text-gray-900 mb-3">Configuration:</h3>
+                <ul className="space-y-2 text-sm">
+                  <li className="flex items-center">
+                    <CheckCircleIcon className="h-4 w-4 text-green-500 mr-2" />
+                    <span>Claude AI suggestions enabled</span>
+                  </li>
+                  {session.aiSettings.businessScenario && (
+                    <li className="flex items-center">
+                      <CheckCircleIcon className="h-4 w-4 text-green-500 mr-2" />
+                      <span>Business scenario: <strong>{session.aiSettings.businessScenario}</strong></span>
+                    </li>
+                  )}
+                  <li className="flex items-center">
+                    <CheckCircleIcon className="h-4 w-4 text-green-500 mr-2" />
+                    <span>Context-aware field generation</span>
+                  </li>
+                  <li className="flex items-center">
+                    <CheckCircleIcon className="h-4 w-4 text-green-500 mr-2" />
+                    <span>Relationship-based data coherence</span>
+                  </li>
+                </ul>
+              </div>
+
+              <div>
+                <h3 className="font-medium text-gray-900 mb-3">Benefits:</h3>
+                <ul className="space-y-2 text-sm text-gray-600">
+                  <li className="flex items-start">
+                    <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full mt-2 mr-2 flex-shrink-0"></span>
+                    <span>Industry-specific data patterns</span>
+                  </li>
+                  <li className="flex items-start">
+                    <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full mt-2 mr-2 flex-shrink-0"></span>
+                    <span>Realistic business relationships</span>
+                  </li>
+                  <li className="flex items-start">
+                    <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full mt-2 mr-2 flex-shrink-0"></span>
+                    <span>Validation-compliant values</span>
+                  </li>
+                  <li className="flex items-start">
+                    <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full mt-2 mr-2 flex-shrink-0"></span>
+                    <span>Higher data quality and usability</span>
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="mt-4 p-3 bg-white border border-indigo-200 rounded-lg">
+              <div className="flex items-start">
+                <InformationCircleIcon className="h-5 w-5 text-indigo-500 mr-2 flex-shrink-0 mt-0.5" />
+                <div className="text-sm">
+                  <p className="text-indigo-800 font-medium">Enhanced Data Generation</p>
+                  <p className="text-indigo-700 mt-1">
+                    AI suggestions will be used during data generation to create more realistic, context-aware field values. 
+                    This may slightly increase generation time but significantly improves data quality and business relevance.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Processing Order */}
       <div className="mb-8">

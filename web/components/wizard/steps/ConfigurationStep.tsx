@@ -10,6 +10,7 @@ import {
 import { WizardSession, WizardStep, DataGenerationPreferences as PrefsType } from '../../../shared/types/api';
 import { Socket } from 'socket.io-client';
 import DataGenerationPreferences from '../../preferences/DataGenerationPreferences';
+import SuggestionPanel from '../../ai/SuggestionPanel';
 
 interface ConfigurationStepProps {
   session: WizardSession;
@@ -54,6 +55,10 @@ export default function ConfigurationStep({
     loading: true
   });
   const [dataGenerationPreferences, setDataGenerationPreferences] = useState<PrefsType | null>(null);
+  const [aiSuggestionsEnabled, setAiSuggestionsEnabled] = useState(false);
+  const [selectedBusinessScenario, setSelectedBusinessScenario] = useState<string>('');
+  const [businessScenarios, setBusinessScenarios] = useState<any[]>([]);
+  const [showSuggestionPanel, setShowSuggestionPanel] = useState(false);
 
   useEffect(() => {
     // Initialize configurations with smart defaults
@@ -101,8 +106,28 @@ export default function ConfigurationStep({
     calculateEstimatedStorage();
   }, [configurations, session.fieldAnalysis]);
 
+  useEffect(() => {
+    // Load business scenarios for AI suggestions
+    fetchBusinessScenarios();
+  }, []);
+
   // Remove redundant preference loading - let the child component handle it
   // and just use the callback to update parent state when needed
+
+  const fetchBusinessScenarios = async () => {
+    try {
+      const response = await fetch('/api/suggestions/business-scenarios');
+      const result = await response.json();
+      
+      if (result.success) {
+        setBusinessScenarios(result.scenarios);
+      } else {
+        console.error('Failed to fetch business scenarios:', result.error);
+      }
+    } catch (error) {
+      console.error('Error fetching business scenarios:', error);
+    }
+  };
 
   const fetchStorageInfo = async () => {
     try {
@@ -292,7 +317,11 @@ export default function ConfigurationStep({
         },
         body: JSON.stringify({
           configuration: configurations,
-          globalSettings
+          globalSettings,
+          aiSettings: {
+            suggestionsEnabled: aiSuggestionsEnabled,
+            businessScenario: selectedBusinessScenario
+          }
         }),
       });
 
@@ -658,6 +687,135 @@ export default function ConfigurationStep({
               </label>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* AI Suggestions & Business Context */}
+      <div className="mb-8">
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">AI-Powered Data Generation</h2>
+        <div className="bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-lg p-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* AI Settings */}
+            <div>
+              <div className="mb-4">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={aiSuggestionsEnabled}
+                    onChange={(e) => setAiSuggestionsEnabled(e.target.checked)}
+                    className="h-4 w-4 text-blue-600 border-gray-300 rounded mr-3"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-700">Enable AI Suggestions</span>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Use Claude AI to generate context-aware, business-relevant field values
+                    </p>
+                  </div>
+                </label>
+              </div>
+
+              {aiSuggestionsEnabled && businessScenarios.length > 0 && (
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Business Scenario:
+                  </label>
+                  <select
+                    value={selectedBusinessScenario}
+                    onChange={(e) => setSelectedBusinessScenario(e.target.value)}
+                    className="block w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
+                  >
+                    <option value="">Select a business context...</option>
+                    {businessScenarios.map((scenario, index) => (
+                      <option key={index} value={scenario.name}>
+                        {scenario.name} - {scenario.description}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Choose a business context to generate industry-appropriate data patterns
+                  </p>
+                </div>
+              )}
+
+              {aiSuggestionsEnabled && (
+                <button
+                  onClick={() => setShowSuggestionPanel(!showSuggestionPanel)}
+                  className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm transition-colors"
+                >
+                  {showSuggestionPanel ? 'Hide' : 'Show'} Field Suggestions Preview
+                </button>
+              )}
+            </div>
+
+            {/* AI Benefits */}
+            <div className="bg-white rounded-lg p-4 border border-blue-200">
+              <h3 className="font-medium text-gray-900 mb-3">AI Suggestions Benefits:</h3>
+              <ul className="space-y-2 text-sm text-gray-600">
+                <li className="flex items-start">
+                  <span className="w-1.5 h-1.5 bg-blue-500 rounded-full mt-2 mr-2 flex-shrink-0"></span>
+                  <span>Industry-specific data patterns that match real business scenarios</span>
+                </li>
+                <li className="flex items-start">
+                  <span className="w-1.5 h-1.5 bg-blue-500 rounded-full mt-2 mr-2 flex-shrink-0"></span>
+                  <span>Relationship-aware values that create logical data connections</span>
+                </li>
+                <li className="flex items-start">
+                  <span className="w-1.5 h-1.5 bg-blue-500 rounded-full mt-2 mr-2 flex-shrink-0"></span>
+                  <span>Validation-compliant suggestions that reduce data load errors</span>
+                </li>
+                <li className="flex items-start">
+                  <span className="w-1.5 h-1.5 bg-blue-500 rounded-full mt-2 mr-2 flex-shrink-0"></span>
+                  <span>Context-aware generation that improves with business information</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          {/* Suggestion Panel Preview */}
+          {showSuggestionPanel && aiSuggestionsEnabled && (
+            <div className="mt-6 pt-6 border-t border-blue-200">
+              <h3 className="font-medium text-gray-900 mb-3">Field Suggestion Preview:</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Select an object and field to see AI-generated suggestions. This preview shows how suggestions will appear during data generation.
+              </p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                <select
+                  className="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
+                  value=""
+                  onChange={(e) => {
+                    // This is just for demo - actual integration happens in generation
+                  }}
+                >
+                  <option value="">Select Object...</option>
+                  {Object.keys(configurations).map(objectName => (
+                    <option key={objectName} value={objectName}>{objectName}</option>
+                  ))}
+                </select>
+                
+                <select
+                  className="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
+                  value=""
+                  disabled
+                >
+                  <option value="">Select Field...</option>
+                </select>
+                
+                <button
+                  className="px-4 py-2 bg-gray-300 text-gray-600 rounded-md text-sm cursor-not-allowed"
+                  disabled
+                >
+                  Generate Suggestions
+                </button>
+              </div>
+              
+              <div className="text-center text-gray-500 text-sm py-8 border-2 border-dashed border-gray-200 rounded-lg">
+                Select an object and field above to preview AI suggestions
+                <br />
+                <span className="text-xs">Full suggestions will be available during data generation</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
