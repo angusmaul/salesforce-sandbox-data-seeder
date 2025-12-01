@@ -31,7 +31,7 @@
     "commander": "^11.1.0",
     "conf": "^10.2.0",
     "inquirer": "^9.2.12",
-    "jsforce": "^3.10.0",
+    "jsforce": "^3.10.8",
     "ora": "^5.4.1"
   },
   "devDependencies": {
