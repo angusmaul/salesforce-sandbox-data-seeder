@@ -87,9 +87,10 @@ export default function ResultsStep({
   };
 
   const handleDownloadLogs = () => {
-    if (loadSessionId) {
-      window.open(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/logs/download/${loadSessionId}`, '_blank');
-    }
+    if (!loadSessionId) return;
+    // Use location.href instead of window.open to avoid pop-up blockers
+    // Server sets Content-Disposition: attachment so browser downloads without navigating
+    window.location.href = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/logs/download/${loadSessionId}`;
   };
 
   const handleExportResults = () => {

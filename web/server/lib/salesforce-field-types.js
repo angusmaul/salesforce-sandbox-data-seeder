@@ -1081,43 +1081,75 @@ class FieldDataGenerator {
 
 
 /**
- * AI Enhancement Hooks
- * These functions can be replaced with AI models in the future
+ * AI-Plan-Aware Value Generator
+ *
+ * Uses the cached AI generation plan (if available) to pick a semantic
+ * generator from field-data-library, then falls back to the existing
+ * pattern-matching logic.
  */
-class AIEnhancementHooks {
+const { generateFromLibrary, buildCorrelatedContext } = require('./field-data-library');
+
+class AIPlanGenerator {
   /**
-   * Analyze field context using AI (future implementation)
-   * @param {Object} field - Field metadata
-   * @param {string} objectName - Object context
-   * @returns {Object} AI-suggested data generation strategy
+   * Generate a field value using the AI generation plan.
+   * Falls back to FieldDataGenerator.generateValue() when the plan
+   * has no mapping or the library generator returns null.
+   *
+   * @param {Object} field - Salesforce field metadata
+   * @param {number} index - Record index
+   * @param {string} objectName - Salesforce object API name
+   * @param {Object} options - Generation options (preferences, referenceId, etc.)
+   * @param {Object} recordContext - Current record context for correlations
+   * @param {Object} aiPlan - AI generation plan for this object (fieldMappings + correlations)
+   * @param {Object} correlatedCtx - Pre-built correlated context from buildCorrelatedContext()
+   * @returns {*} generated value
    */
-  static async analyzeFieldContext(field, objectName) {
-    // Future: Call AI model to analyze field and suggest best data
-    // For now, return null to use default logic
-    return null;
-  }
-  
-  /**
-   * Generate contextually appropriate value using AI
-   * @param {Object} field - Field metadata
-   * @param {Object} recordContext - Other fields in the same record
-   * @returns {*} AI-generated field value
-   */
-  static async generateContextualValue(field, recordContext) {
-    // Future: Use AI to generate value based on other field values
-    // Example: Generate appropriate job title based on department
-    return null;
-  }
-  
-  /**
-   * Validate generated value using AI
-   * @param {*} value - Generated value
-   * @param {Object} field - Field metadata
-   * @returns {boolean} Whether the value is appropriate
-   */
-  static async validateValue(value, field) {
-    // Future: Use AI to validate if generated value makes sense
-    return true;
+  static SKIP_FIELD = Symbol('SKIP_FIELD');
+
+  static generateValueWithPlan(field, index, objectName, options, recordContext, aiPlan, correlatedCtx) {
+    if (!aiPlan?.fieldMappings) {
+      return FieldDataGenerator.generateValue(field, index, objectName, options, recordContext);
+    }
+
+    const mapping = aiPlan.fieldMappings[field.name];
+    if (!mapping) {
+      return FieldDataGenerator.generateValue(field, index, objectName, options, recordContext);
+    }
+
+    const { category, subcategory } = mapping;
+
+    // Skip categories that are handled by existing logic
+    if (category === 'skip' || category === 'picklist') {
+      return FieldDataGenerator.generateValue(field, index, objectName, options, recordContext);
+    }
+
+    // Skip text state/country fields when corresponding Code fields exist.
+    // Salesforce auto-populates text fields from code fields when State/Country picklists are enabled.
+    // Generating both independently causes FIELD_INTEGRITY_EXCEPTION mismatches.
+    // Handles: BillingState/BillingStateCode, State/StateCode, Country/CountryCode, etc.
+    if (/^(Billing|Shipping|Mailing|Other)?(State|Country)$/i.test(field.name)) {
+      const codeFieldName = field.name + 'Code';
+      if (aiPlan.fieldMappings[codeFieldName]) {
+        return AIPlanGenerator.SKIP_FIELD;
+      }
+    }
+
+    // Merge correlated context into record context for the library call
+    const ctx = { ...correlatedCtx, ...recordContext };
+
+    const value = generateFromLibrary(category, subcategory, ctx);
+
+    if (value === null || value === undefined) {
+      // Library didn't produce a value — fall back
+      return FieldDataGenerator.generateValue(field, index, objectName, options, recordContext);
+    }
+
+    // Apply field length constraints for string types
+    if (typeof value === 'string' && field.length && value.length > field.length) {
+      return value.substring(0, field.length);
+    }
+
+    return value;
   }
 }
 
@@ -1126,5 +1158,5 @@ module.exports = {
   FIELD_TYPE_CONSTRAINTS,
   FIELD_CONTEXT_PATTERNS,
   FieldDataGenerator,
-  AIEnhancementHooks
+  AIPlanGenerator
 };

@@ -19,6 +19,8 @@ export interface WizardSession {
   globalSettings?: GlobalSettings;
   dataGenerationPreferences?: DataGenerationPreferences;
   generationPlan?: GenerationPlan[];
+  aiGenerationPlan?: AIGenerationPlan;
+  aiCompanyProfile?: CompanyProfile;
   executionResults?: SeedResult[];
   loadSessionId?: string;
   createdAt: Date;
@@ -119,3 +121,32 @@ import {
 } from '../../../src/models/salesforce';
 
 import { GenerationPlan } from '../../../src/generators/data-generator';
+
+// AI Generation Plan types
+export type CompanyProfile = 'small' | 'medium' | 'enterprise' | 'mixed';
+
+export interface AIFieldMapping {
+  category: string;
+  subcategory: string;
+  confidence: 'high' | 'medium' | 'low';
+  reason: string;
+}
+
+export interface AICorrelation {
+  type: 'department_jobtitle' | 'country_phone' | 'name_email' | 'country_address' | 'company_size';
+  fields: string[];
+}
+
+export interface AIObjectPlan {
+  fieldMappings: { [fieldName: string]: AIFieldMapping };
+  correlations: AICorrelation[];
+}
+
+export interface AIGenerationPlan {
+  [objectName: string]: AIObjectPlan;
+}
+
+export interface CategoryOption {
+  category: string;
+  subcategory: string;
+}
