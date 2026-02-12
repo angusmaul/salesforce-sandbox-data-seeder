@@ -1,23 +1,29 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { toast } from 'react-hot-toast';
-import { 
+import {
   EyeIcon,
   PlayIcon,
   ClockIcon,
   CubeIcon,
-  ArrowRightIcon,
   CheckCircleIcon,
   ExclamationTriangleIcon,
   InformationCircleIcon,
   ChartBarIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  XMarkIcon,
   DocumentTextIcon,
-  LinkIcon
+  LinkIcon,
+  SparklesIcon,
+  ArrowPathIcon,
+  AdjustmentsHorizontalIcon
 } from '@heroicons/react/24/outline';
-import { WizardSession, WizardStep } from '../../../shared/types/api';
+import {
+  WizardSession, WizardStep, AIGenerationPlan,
+  CompanyProfile, CategoryOption
+} from '../../../shared/types/api';
 import { Socket } from 'socket.io-client';
+
+const API_BASE = 'http://localhost:3001';
 
 interface PreviewStepProps {
   session: WizardSession;
@@ -26,23 +32,64 @@ interface PreviewStepProps {
   socket?: Socket | null;
 }
 
-export default function PreviewStep({ 
-  session, 
-  onNext, 
-  onPrevious 
+// Confidence badge colors
+const CONFIDENCE_COLORS: Record<string, string> = {
+  high: 'bg-green-100 text-green-800',
+  medium: 'bg-yellow-100 text-yellow-800',
+  low: 'bg-red-100 text-red-800'
+};
+
+// Company profile labels
+const PROFILE_OPTIONS: { value: CompanyProfile; label: string; description: string }[] = [
+  { value: 'small', label: 'Small Business', description: 'Revenue <$5M, 1-50 employees' },
+  { value: 'medium', label: 'Medium Business', description: 'Revenue $5M-$100M, 50-500 employees' },
+  { value: 'enterprise', label: 'Enterprise', description: 'Revenue >$100M, 500+ employees' },
+  { value: 'mixed', label: 'Mixed', description: 'Random mix of all sizes' }
+];
+
+export default function PreviewStep({
+  session,
+  onNext,
+  onPrevious
 }: PreviewStepProps) {
   const [isGenerating, setIsGenerating] = useState(false);
-  const [selectedObjectForPreview, setSelectedObjectForPreview] = useState<string | null>(null);
   const [expandedObjects, setExpandedObjects] = useState<Set<string>>(new Set());
+
+  // AI plan state
+  const [aiPlan, setAiPlan] = useState<AIGenerationPlan | null>(session.aiGenerationPlan || null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [companyProfile, setCompanyProfile] = useState<CompanyProfile>(session.aiCompanyProfile || 'medium');
+  const [categories, setCategories] = useState<CategoryOption[]>([]);
+  const [sampleRecords, setSampleRecords] = useState<Record<string, any[]>>({});
+  const [loadingSamples, setLoadingSamples] = useState<Set<string>>(new Set());
+  const [editingField, setEditingField] = useState<{ object: string; field: string } | null>(null);
+
+  // Load categories list for override dropdowns
+  useEffect(() => {
+    fetch(`${API_BASE}/api/ai/categories`)
+      .then(r => r.json())
+      .then(res => { if (res.success) setCategories(res.data); })
+      .catch(() => {});
+  }, []);
+
+  // Load existing AI plan from session on mount
+  useEffect(() => {
+    if (!aiPlan && session.id) {
+      fetch(`${API_BASE}/api/ai/generation-plan/${session.id}`)
+        .then(r => r.json())
+        .then(res => { if (res.success && res.data) setAiPlan(res.data); })
+        .catch(() => {});
+    }
+  }, [session.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Calculate generation summary
   const generationSummary = useMemo(() => {
     if (!session.configuration) return null;
 
-    const enabledConfigs = Object.values(session.configuration).filter(config => config.enabled);
-    const totalRecords = enabledConfigs.reduce((sum, config) => sum + config.recordCount, 0);
-    const estimatedTime = Math.ceil(totalRecords / 100); // ~100 records per minute
-    
+    const enabledConfigs = Object.values(session.configuration).filter((config: any) => config.enabled);
+    const totalRecords = enabledConfigs.reduce((sum: number, config: any) => sum + config.recordCount, 0);
+    const estimatedTime = Math.ceil(totalRecords / 100);
+
     return {
       objectCount: enabledConfigs.length,
       totalRecords,
@@ -51,75 +98,153 @@ export default function PreviewStep({
     };
   }, [session.configuration]);
 
-  // Calculate dependency order (iterative topological sort to avoid circular reference issues)
+  // Calculate dependency order
   const dependencyOrder = useMemo(() => {
     if (!session.configuration || !session.fieldAnalysis) return [];
 
-    const enabledConfigs = Object.values(session.configuration).filter(config => config.enabled);
-    
-    // Create a safe ordering that handles circular dependencies
+    const enabledConfigs = Object.values(session.configuration).filter((config: any) => config.enabled);
     const ordered: any[] = [];
     const remaining = [...enabledConfigs];
     const processed = new Set<string>();
-    
-    // First, add objects with no dependencies or dependencies outside our selected set
+
     const addNextBatch = () => {
       const nextBatch: any[] = [];
-      
       for (let i = remaining.length - 1; i >= 0; i--) {
         const config = remaining[i];
-        const fieldAnalysis = session.fieldAnalysis[config.name];
-        
-        // Get dependencies that are in our selected objects
+        const fieldAnalysis = session.fieldAnalysis![config.name];
         const relevantDeps = fieldAnalysis?.relationships?.map((rel: any) => rel.referenceTo).flat()
-          .filter((dep: string) => enabledConfigs.some(c => c.name === dep)) || [];
-        
-        // If all relevant dependencies are already processed, this object can be added
+          .filter((dep: string) => enabledConfigs.some((c: any) => c.name === dep)) || [];
         const canAdd = relevantDeps.every((dep: string) => processed.has(dep));
-        
         if (canAdd) {
-          nextBatch.push({
-            ...config,
-            fieldAnalysis,
-            dependencies: relevantDeps
-          });
+          nextBatch.push({ ...config, fieldAnalysis, dependencies: relevantDeps });
           remaining.splice(i, 1);
           processed.add(config.name);
         }
       }
-      
       return nextBatch;
     };
-    
-    // Process in batches until all objects are ordered
-    let maxIterations = enabledConfigs.length + 5; // Safety limit
+
+    let maxIterations = enabledConfigs.length + 5;
     while (remaining.length > 0 && maxIterations > 0) {
       const batch = addNextBatch();
-      
       if (batch.length === 0) {
-        // Circular dependency detected - add remaining objects anyway
-        const remaining_copy = [...remaining];
-        remaining_copy.forEach(config => {
-          const fieldAnalysis = session.fieldAnalysis[config.name];
+        remaining.forEach((config: any) => {
+          const fieldAnalysis = session.fieldAnalysis![config.name];
           const relevantDeps = fieldAnalysis?.relationships?.map((rel: any) => rel.referenceTo).flat()
-            .filter((dep: string) => enabledConfigs.some(c => c.name === dep)) || [];
-          
-          batch.push({
-            ...config,
-            fieldAnalysis,
-            dependencies: relevantDeps
-          });
+            .filter((dep: string) => enabledConfigs.some((c: any) => c.name === dep)) || [];
+          batch.push({ ...config, fieldAnalysis, dependencies: relevantDeps });
           processed.add(config.name);
         });
-        remaining.length = 0; // Clear remaining
+        remaining.length = 0;
       }
-      
       ordered.push(...batch);
       maxIterations--;
     }
-    
     return ordered;
   }, [session.configuration, session.fieldAnalysis]);
+
+  // System fields that cannot be written to
+  const systemFields = new Set([
+    'Id', 'CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById',
+    'SystemModstamp', 'LastActivityDate', 'LastViewedDate', 'LastReferencedDate',
+    'IsDeleted', 'MasterRecordId', 'RecordTypeId', 'OwnerId'
+  ]);
+
+  const getWritableFields = (fieldAnalysis: any) => {
+    return fieldAnalysis?.fields?.filter((field: any) =>
+      !systemFields.has(field.name) &&
+      !field.name.endsWith('__pc') &&
+      !field.name.startsWith('Formula') &&
+      field.type !== 'calculated' &&
+      field.type !== 'summary' &&
+      field.createable !== false &&
+      !field.calculated &&
+      !field.calculatedFormula &&
+      !field.autoNumber
+    ) || [];
+  };
+
+  // --- AI Analysis ---
+
+  const handleAnalyzeFields = useCallback(async () => {
+    if (!session.id) return;
+    setIsAnalyzing(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/ai/analyze-fields/${session.id}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setAiPlan(data.data);
+        toast.success(`AI analyzed ${data.objectCount} objects`);
+      } else {
+        toast.error(data.error || 'AI analysis failed');
+      }
+    } catch (err: any) {
+      toast.error(`AI analysis error: ${err.message}`);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }, [session.id]);
+
+  // --- Load sample records for an object ---
+
+  const loadSampleRecords = useCallback(async (objectName: string) => {
+    if (!session.id) return;
+    setLoadingSamples(prev => new Set(prev).add(objectName));
+    try {
+      const res = await fetch(`${API_BASE}/api/ai/sample-values/${session.id}/${objectName}?count=3`);
+      const data = await res.json();
+      if (data.success) {
+        setSampleRecords(prev => ({ ...prev, [objectName]: data.data }));
+      }
+    } catch {
+      // silent
+    } finally {
+      setLoadingSamples(prev => {
+        const next = new Set(prev);
+        next.delete(objectName);
+        return next;
+      });
+    }
+  }, [session.id]);
+
+  // --- Override a field's mapping ---
+
+  const handleOverride = useCallback(async (objectName: string, fieldName: string, category: string, subcategory: string) => {
+    if (!session.id || !aiPlan) return;
+    const overrides = { [objectName]: { [fieldName]: { category, subcategory } } };
+    try {
+      const res = await fetch(`${API_BASE}/api/ai/generation-plan/${session.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ overrides })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAiPlan(data.data);
+        setEditingField(null);
+        // Refresh samples for this object
+        loadSampleRecords(objectName);
+      }
+    } catch {
+      toast.error('Failed to save override');
+    }
+  }, [session.id, aiPlan, loadSampleRecords]);
+
+  // --- Save company profile ---
+
+  const handleProfileChange = useCallback(async (profile: CompanyProfile) => {
+    setCompanyProfile(profile);
+    if (!session.id) return;
+    try {
+      await fetch(`${API_BASE}/api/ai/generation-plan/${session.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyProfile: profile })
+      });
+    } catch {
+      // silent
+    }
+  }, [session.id]);
 
   const handleStartGeneration = async () => {
     if (!generationSummary || generationSummary.totalRecords === 0) {
@@ -127,7 +252,6 @@ export default function PreviewStep({
       return;
     }
 
-    // Confirm large datasets
     if (generationSummary.totalRecords > 1000) {
       const proceed = window.confirm(
         `You're about to generate ${generationSummary.totalRecords.toLocaleString()} records across ${generationSummary.objectCount} objects. This will take approximately ${generationSummary.estimatedTime} minutes. Continue?`
@@ -153,96 +277,33 @@ export default function PreviewStep({
         newSet.delete(objectName);
       } else {
         newSet.add(objectName);
+        // Auto-load sample records when expanding with AI plan
+        if (aiPlan?.[objectName] && !sampleRecords[objectName]) {
+          loadSampleRecords(objectName);
+        }
       }
       return newSet;
     });
   };
 
-  // System fields that cannot be written to
-  const systemFields = new Set([
-    'Id', 'CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById', 
-    'SystemModstamp', 'LastActivityDate', 'LastViewedDate', 'LastReferencedDate',
-    'IsDeleted', 'MasterRecordId', 'RecordTypeId', 'OwnerId'
-  ]);
-
-  // Generate sample field data preview with variation
-  const generateSampleFieldData = (field: any, recordIndex: number) => {
-    const baseValue = (() => {
-      switch (field.type.toLowerCase()) {
-        case 'string':
-        case 'textarea':
-          if (field.name.toLowerCase().includes('name')) {
-            return [`Sample Company ${recordIndex + 1}`, `Test Account ${recordIndex + 1}`, `Demo Business ${recordIndex + 1}`][recordIndex % 3];
-          }
-          if (field.name.toLowerCase().includes('email')) {
-            return [`user${recordIndex + 1}@example.com`, `test${recordIndex + 1}@demo.com`, `sample${recordIndex + 1}@test.org`][recordIndex % 3];
-          }
-          if (field.name.toLowerCase().includes('phone')) {
-            return [`+1 (555) ${String(123 + recordIndex).padStart(3, '0')}-${String(4567 + recordIndex).padStart(4, '0')}`, 
-                    `+1 (444) ${String(987 + recordIndex).padStart(3, '0')}-${String(6543 + recordIndex).padStart(4, '0')}`, 
-                    `+1 (333) ${String(456 + recordIndex).padStart(3, '0')}-${String(7890 + recordIndex).padStart(4, '0')}`][recordIndex % 3];
-          }
-          return `Sample text data ${recordIndex + 1}`;
-        case 'email':
-          return [`user${recordIndex + 1}@example.com`, `test${recordIndex + 1}@demo.com`, `sample${recordIndex + 1}@test.org`][recordIndex % 3];
-        case 'phone':
-          return `+1 (555) ${String(123 + recordIndex).padStart(3, '0')}-${String(4567 + recordIndex).padStart(4, '0')}`;
-        case 'url':
-          return [`https://example${recordIndex + 1}.com`, `https://demo${recordIndex + 1}.org`, `https://test${recordIndex + 1}.net`][recordIndex % 3];
-        case 'boolean':
-          return [true, false, true][recordIndex % 3].toString();
-        case 'date':
-          const date = new Date(2024, 11, 1 + recordIndex);
-          return date.toISOString().split('T')[0];
-        case 'datetime':
-          const datetime = new Date(2024, 11, 1 + recordIndex, 10 + recordIndex % 12, 30);
-          return datetime.toISOString().replace('T', ' ').slice(0, 19);
-        case 'currency':
-        case 'double':
-          return (1000 + recordIndex * 250).toString();
-        case 'int':
-          return (100 + recordIndex * 25).toString();
-        case 'percent':
-          return `${75 + recordIndex * 5}%`;
-        case 'picklist':
-          return [`Option A`, `Option B`, `Option C`][recordIndex % 3];
-        case 'multipicklist':
-          return [`Option A`, `Option B; Option C`, `Option A; Option C`][recordIndex % 3];
-        case 'reference':
-          return field.referenceTo?.[0] ? `REF${String(1001 + recordIndex).padStart(4, '0')}` : `REF${String(1001 + recordIndex).padStart(4, '0')}`;
-        default:
-          return `Value ${recordIndex + 1}`;
-      }
-    })();
-    
-    return baseValue;
-  };
-
-  // Filter writable fields
-  const getWritableFields = (fieldAnalysis: any) => {
-    return fieldAnalysis?.fields?.filter((field: any) => 
-      !systemFields.has(field.name) && 
-      !field.name.endsWith('__pc') && // Person Contact fields
-      !field.name.startsWith('Formula') &&
-      field.type !== 'calculated' &&
-      field.type !== 'summary'
-    ) || [];
-  };
+  // Group categories for the dropdown
+  const groupedCategories = useMemo(() => {
+    const grouped: Record<string, string[]> = {};
+    for (const { category, subcategory } of categories) {
+      if (!grouped[category]) grouped[category] = [];
+      grouped[category].push(subcategory);
+    }
+    return grouped;
+  }, [categories]);
 
   if (!generationSummary) {
     return (
       <div className="p-8">
         <div className="text-center py-12">
           <ExclamationTriangleIcon className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 mb-2">
-            No Configuration Found
-          </h3>
-          <p className="text-gray-600 mb-6">
-            Please go back and configure your data generation settings.
-          </p>
-          <button onClick={() => onPrevious('configuration')} className="btn-primary">
-            Back to Configuration
-          </button>
+          <h3 className="text-lg font-medium text-gray-900 mb-2">No Configuration Found</h3>
+          <p className="text-gray-600 mb-6">Please go back and configure your data generation settings.</p>
+          <button onClick={() => onPrevious('configuration')} className="btn-primary">Back to Configuration</button>
         </div>
       </div>
     );
@@ -254,9 +315,7 @@ export default function PreviewStep({
       <div className="mb-8">
         <div className="flex items-center mb-4">
           <EyeIcon className="h-8 w-8 text-blue-600 mr-3" />
-          <h1 className="text-2xl font-bold text-gray-900">
-            Review Generation Plan
-          </h1>
+          <h1 className="text-2xl font-bold text-gray-900">Review Generation Plan</h1>
         </div>
         <p className="text-gray-600">
           Review your data generation configuration before starting. Objects will be processed in dependency order.
@@ -274,7 +333,6 @@ export default function PreviewStep({
             </div>
           </div>
         </div>
-        
         <div className="bg-green-50 p-4 rounded-lg">
           <div className="flex items-center">
             <ChartBarIcon className="h-6 w-6 text-green-600 mr-2" />
@@ -284,7 +342,6 @@ export default function PreviewStep({
             </div>
           </div>
         </div>
-        
         <div className="bg-purple-50 p-4 rounded-lg">
           <div className="flex items-center">
             <ClockIcon className="h-6 w-6 text-purple-600 mr-2" />
@@ -294,7 +351,6 @@ export default function PreviewStep({
             </div>
           </div>
         </div>
-
         <div className="bg-amber-50 p-4 rounded-lg">
           <div className="flex items-center">
             <InformationCircleIcon className="h-6 w-6 text-amber-600 mr-2" />
@@ -304,6 +360,62 @@ export default function PreviewStep({
             </div>
           </div>
         </div>
+      </div>
+
+      {/* AI Analysis Section */}
+      <div className="mb-8 p-4 border border-indigo-200 bg-indigo-50 rounded-lg">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center">
+            <SparklesIcon className="h-5 w-5 text-indigo-600 mr-2" />
+            <h2 className="text-lg font-semibold text-indigo-900">AI-Enhanced Data Generation</h2>
+          </div>
+          <div className="flex items-center gap-3">
+            {/* Company Profile Selector */}
+            {aiPlan && (
+              <select
+                value={companyProfile}
+                onChange={e => handleProfileChange(e.target.value as CompanyProfile)}
+                className="text-sm border border-indigo-300 rounded-md px-2 py-1 bg-white text-indigo-900"
+              >
+                {PROFILE_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            )}
+            <button
+              onClick={handleAnalyzeFields}
+              disabled={isAnalyzing}
+              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isAnalyzing ? (
+                <>
+                  <ArrowPathIcon className="h-4 w-4 mr-1.5 animate-spin" />
+                  Analyzing...
+                </>
+              ) : aiPlan ? (
+                <>
+                  <ArrowPathIcon className="h-4 w-4 mr-1.5" />
+                  Re-analyze
+                </>
+              ) : (
+                <>
+                  <SparklesIcon className="h-4 w-4 mr-1.5" />
+                  Analyze Fields with AI
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+        <p className="text-sm text-indigo-700">
+          {aiPlan
+            ? `AI has classified fields across ${Object.keys(aiPlan).length} objects. Expand objects below to see mappings, override categories, and preview realistic sample data.`
+            : 'Use AI to analyze your field schemas and generate more realistic, correlated test data. This sends field metadata (not your data) to Claude for classification.'}
+        </p>
+        {aiPlan && companyProfile && (
+          <p className="text-xs text-indigo-500 mt-1">
+            Record profile: <strong>{PROFILE_OPTIONS.find(p => p.value === companyProfile)?.label}</strong> — {PROFILE_OPTIONS.find(p => p.value === companyProfile)?.description}
+          </p>
+        )}
       </div>
 
       {/* Processing Order */}
@@ -316,17 +428,18 @@ export default function PreviewStep({
               Objects will be processed in this order to respect data dependencies:
             </p>
           </div>
-          
+
           <div className="space-y-3">
-            {dependencyOrder.map((item, index) => {
+            {dependencyOrder.map((item: any, index: number) => {
               const isExpanded = expandedObjects.has(item.name);
               const fieldAnalysis = item.fieldAnalysis;
+              const writableFields = getWritableFields(fieldAnalysis);
               const requiredFields = fieldAnalysis?.fields?.filter((f: any) => f.required) || [];
-              const totalFields = fieldAnalysis?.fields?.length || 0;
-              
+              const objectPlan = aiPlan?.[item.name];
+
               return (
                 <div key={item.name} className="border border-gray-200 rounded-lg">
-                  <div 
+                  <div
                     className="flex items-center p-3 cursor-pointer hover:bg-gray-50"
                     onClick={() => toggleObjectExpansion(item.name)}
                   >
@@ -334,14 +447,19 @@ export default function PreviewStep({
                       {index + 1}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center">
-                        <h3 className="font-medium text-gray-900 mr-4">{item.name}</h3>
-                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 mr-2">
+                      <div className="flex items-center flex-wrap gap-2">
+                        <h3 className="font-medium text-gray-900">{item.name}</h3>
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
                           {item.recordCount.toLocaleString()} records
                         </span>
-                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 mr-2">
-                          {totalFields} fields
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                          {writableFields.length} fields
                         </span>
+                        {objectPlan && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                            <SparklesIcon className="h-3 w-3 mr-0.5" />AI mapped
+                          </span>
+                        )}
                         {item.dependencies.length > 0 && (
                           <span className="text-xs text-gray-500">
                             Depends on: {item.dependencies.slice(0, 2).join(', ')}
@@ -349,9 +467,9 @@ export default function PreviewStep({
                           </span>
                         )}
                       </div>
-                      <p className="text-sm text-gray-500 mt-1">{item.fieldAnalysis?.label}</p>
+                      <p className="text-sm text-gray-500 mt-1">{fieldAnalysis?.label}</p>
                     </div>
-                    <div className="flex items-center ml-4">
+                    <div className="ml-4">
                       {isExpanded ? (
                         <ChevronDownIcon className="h-5 w-5 text-gray-400" />
                       ) : (
@@ -359,8 +477,8 @@ export default function PreviewStep({
                       )}
                     </div>
                   </div>
-                  
-                  {/* Expandable Field Details */}
+
+                  {/* Expanded Detail */}
                   {isExpanded && fieldAnalysis && (
                     <div className="border-t border-gray-200 p-4 bg-gray-50">
                       <div className="space-y-6">
@@ -373,15 +491,15 @@ export default function PreviewStep({
                           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                             <div className="bg-white p-3 rounded border">
                               <div className="text-gray-600">Writable Fields:</div>
-                              <div className="font-bold text-blue-600">{getWritableFields(fieldAnalysis).length}</div>
+                              <div className="font-bold text-blue-600">{writableFields.length}</div>
                             </div>
                             <div className="bg-white p-3 rounded border">
                               <div className="text-gray-600">Required Fields:</div>
-                              <div className="font-bold text-red-600">{requiredFields.filter(f => !systemFields.has(f.name)).length}</div>
+                              <div className="font-bold text-red-600">{requiredFields.filter((f: any) => !systemFields.has(f.name)).length}</div>
                             </div>
                             <div className="bg-white p-3 rounded border">
                               <div className="text-gray-600">Custom Fields:</div>
-                              <div className="font-bold text-purple-600">{getWritableFields(fieldAnalysis).filter((f: any) => f.custom).length}</div>
+                              <div className="font-bold text-purple-600">{writableFields.filter((f: any) => f.custom).length}</div>
                             </div>
                             <div className="bg-white p-3 rounded border">
                               <div className="text-gray-600">Relationships:</div>
@@ -390,81 +508,195 @@ export default function PreviewStep({
                           </div>
                         </div>
 
-                        {/* Sample Data Table */}
-                        <div>
-                          <div className="flex items-center justify-between mb-3">
-                            <div className="flex items-center">
-                              <DocumentTextIcon className="h-4 w-4 text-blue-600 mr-2" />
-                              <h4 className="font-medium text-gray-900">Sample Data Preview</h4>
+                        {/* AI Field Strategy Table */}
+                        {objectPlan && (
+                          <div>
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center">
+                                <SparklesIcon className="h-4 w-4 text-indigo-600 mr-2" />
+                                <h4 className="font-medium text-gray-900">AI Field Mappings</h4>
+                              </div>
+                              {objectPlan.correlations?.length > 0 && (
+                                <span className="text-xs text-indigo-600">
+                                  {objectPlan.correlations.length} correlation{objectPlan.correlations.length !== 1 ? 's' : ''} detected
+                                </span>
+                              )}
                             </div>
-                            <span className="text-sm text-gray-600">Showing 5 sample records</span>
+
+                            {/* Correlations */}
+                            {objectPlan.correlations?.length > 0 && (
+                              <div className="mb-3 flex flex-wrap gap-2">
+                                {objectPlan.correlations.map((corr, idx) => (
+                                  <span key={idx} className="inline-flex items-center px-2 py-1 rounded text-xs bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                    <LinkIcon className="h-3 w-3 mr-1" />
+                                    {corr.type}: {corr.fields.join(' + ')}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+                              <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-gray-200">
+                                  <thead className="bg-gray-50">
+                                    <tr>
+                                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Field</th>
+                                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">AI Category</th>
+                                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Confidence</th>
+                                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Sample</th>
+                                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase w-10"></th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-200">
+                                    {writableFields.slice(0, 20).map((field: any) => {
+                                      const mapping = objectPlan.fieldMappings[field.name];
+                                      const isEditing = editingField?.object === item.name && editingField?.field === field.name;
+                                      const sampleValue = sampleRecords[item.name]?.[0]?.[field.name];
+
+                                      return (
+                                        <tr key={field.name} className="hover:bg-gray-50">
+                                          <td className="px-3 py-2 text-sm">
+                                            <div className="font-medium text-gray-900">{field.name}</div>
+                                            <div className="text-xs text-gray-500">{field.label}</div>
+                                          </td>
+                                          <td className="px-3 py-2 text-xs text-gray-600">{field.type}</td>
+                                          <td className="px-3 py-2 text-sm">
+                                            {isEditing ? (
+                                              <select
+                                                autoFocus
+                                                className="text-xs border border-gray-300 rounded px-1 py-0.5 w-full"
+                                                defaultValue={mapping ? `${mapping.category}.${mapping.subcategory}` : ''}
+                                                onChange={e => {
+                                                  const [cat, sub] = e.target.value.split('.');
+                                                  if (cat && sub) handleOverride(item.name, field.name, cat, sub);
+                                                }}
+                                                onBlur={() => setEditingField(null)}
+                                              >
+                                                <option value="">-- select --</option>
+                                                {Object.entries(groupedCategories).map(([cat, subs]) => (
+                                                  <optgroup key={cat} label={cat}>
+                                                    {subs.map(sub => (
+                                                      <option key={`${cat}.${sub}`} value={`${cat}.${sub}`}>
+                                                        {cat}.{sub}
+                                                      </option>
+                                                    ))}
+                                                  </optgroup>
+                                                ))}
+                                              </select>
+                                            ) : mapping ? (
+                                              <span className="text-indigo-700">
+                                                {mapping.category}.{mapping.subcategory}
+                                              </span>
+                                            ) : (
+                                              <span className="text-gray-400 italic">unmapped</span>
+                                            )}
+                                          </td>
+                                          <td className="px-3 py-2 text-xs">
+                                            {mapping && (
+                                              <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${CONFIDENCE_COLORS[mapping.confidence] || 'bg-gray-100 text-gray-800'}`}>
+                                                {mapping.confidence}
+                                              </span>
+                                            )}
+                                          </td>
+                                          <td className="px-3 py-2 text-xs text-gray-700 max-w-[200px] truncate">
+                                            {loadingSamples.has(item.name) ? (
+                                              <span className="text-gray-400">loading...</span>
+                                            ) : sampleValue !== undefined ? (
+                                              <span title={String(sampleValue)}>{String(sampleValue).substring(0, 40)}</span>
+                                            ) : null}
+                                          </td>
+                                          <td className="px-3 py-2">
+                                            <button
+                                              onClick={e => {
+                                                e.stopPropagation();
+                                                setEditingField({ object: item.name, field: field.name });
+                                              }}
+                                              className="text-gray-400 hover:text-indigo-600"
+                                              title="Override category"
+                                            >
+                                              <AdjustmentsHorizontalIcon className="h-4 w-4" />
+                                            </button>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                              {writableFields.length > 20 && (
+                                <div className="px-3 py-2 text-xs text-gray-500 bg-gray-50 border-t">
+                                  +{writableFields.length - 20} more fields not shown
+                                </div>
+                              )}
+                            </div>
                           </div>
-                          
-                          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-                            <div className="overflow-x-auto">
-                              <table className="min-w-full divide-y divide-gray-200">
-                                <thead className="bg-gray-50">
-                                  <tr>
-                                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-12">
-                                      #
-                                    </th>
-                                    {getWritableFields(fieldAnalysis).slice(0, 8).map((field: any) => (
-                                      <th key={field.name} className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider min-w-0">
-                                        <div className="flex items-center gap-1">
-                                          <span className="truncate">{field.name}</span>
-                                          {field.required && <span className="text-red-500">*</span>}
-                                          {field.custom && <span className="text-purple-500">⚙</span>}
-                                        </div>
-                                        <div className="text-xs normal-case text-gray-400 font-normal">
-                                          {field.type}
-                                        </div>
-                                      </th>
-                                    ))}
-                                    {getWritableFields(fieldAnalysis).length > 8 && (
-                                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                        +{getWritableFields(fieldAnalysis).length - 8} more
-                                      </th>
-                                    )}
-                                  </tr>
-                                </thead>
-                                <tbody className="bg-white divide-y divide-gray-200">
-                                  {[0, 1, 2, 3, 4].map((recordIndex) => (
-                                    <tr key={recordIndex} className="hover:bg-gray-50">
-                                      <td className="px-3 py-2 text-sm text-gray-900 font-medium">
-                                        {recordIndex + 1}
-                                      </td>
-                                      {getWritableFields(fieldAnalysis).slice(0, 8).map((field: any) => (
-                                        <td key={field.name} className="px-3 py-2 text-sm text-gray-900 max-w-0">
-                                          <div className="truncate" title={generateSampleFieldData(field, recordIndex)}>
-                                            {generateSampleFieldData(field, recordIndex)}
+                        )}
+
+                        {/* Sample Data Table (when no AI plan, show generic preview) */}
+                        {!objectPlan && (
+                          <div>
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center">
+                                <DocumentTextIcon className="h-4 w-4 text-blue-600 mr-2" />
+                                <h4 className="font-medium text-gray-900">Sample Data Preview</h4>
+                              </div>
+                              <span className="text-sm text-gray-600">Pattern-based generation (no AI)</span>
+                            </div>
+                            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+                              <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-gray-200">
+                                  <thead className="bg-gray-50">
+                                    <tr>
+                                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase w-12">#</th>
+                                      {writableFields.slice(0, 6).map((field: any) => (
+                                        <th key={field.name} className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                                          <div className="flex items-center gap-1">
+                                            <span className="truncate">{field.name}</span>
+                                            {field.required && <span className="text-red-500">*</span>}
                                           </div>
-                                        </td>
+                                          <div className="text-xs normal-case text-gray-400 font-normal">{field.type}</div>
+                                        </th>
                                       ))}
-                                      {getWritableFields(fieldAnalysis).length > 8 && (
-                                        <td className="px-3 py-2 text-sm text-gray-400">
-                                          ...
-                                        </td>
+                                      {writableFields.length > 6 && (
+                                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">+{writableFields.length - 6} more</th>
                                       )}
                                     </tr>
-                                  ))}
-                                </tbody>
-                              </table>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-200">
+                                    {[0, 1, 2].map(idx => (
+                                      <tr key={idx} className="hover:bg-gray-50">
+                                        <td className="px-3 py-2 text-sm text-gray-900 font-medium">{idx + 1}</td>
+                                        {writableFields.slice(0, 6).map((field: any) => {
+                                          const val = sampleRecords[item.name]?.[idx]?.[field.name];
+                                          return (
+                                            <td key={field.name} className="px-3 py-2 text-sm text-gray-700 max-w-[150px]">
+                                              <div className="truncate">{val !== undefined ? String(val) : '—'}</div>
+                                            </td>
+                                          );
+                                        })}
+                                        {writableFields.length > 6 && <td className="px-3 py-2 text-sm text-gray-400">...</td>}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                        
+                        )}
+
                         {/* Required Fields List */}
-                        {requiredFields.filter(f => !systemFields.has(f.name)).length > 0 && (
+                        {requiredFields.filter((f: any) => !systemFields.has(f.name)).length > 0 && (
                           <div>
                             <h5 className="text-sm font-medium text-gray-700 mb-2">Required Fields (will be populated):</h5>
                             <div className="flex flex-wrap gap-1">
-                              {requiredFields.filter(f => !systemFields.has(f.name)).slice(0, 10).map((field: any, idx: number) => (
+                              {requiredFields.filter((f: any) => !systemFields.has(f.name)).slice(0, 10).map((field: any, idx: number) => (
                                 <span key={idx} className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-red-100 text-red-700">
                                   {field.name} ({field.type})
                                 </span>
                               ))}
-                              {requiredFields.filter(f => !systemFields.has(f.name)).length > 10 && (
-                                <span className="text-xs text-gray-500">+{requiredFields.filter(f => !systemFields.has(f.name)).length - 10} more</span>
+                              {requiredFields.filter((f: any) => !systemFields.has(f.name)).length > 10 && (
+                                <span className="text-xs text-gray-500">+{requiredFields.filter((f: any) => !systemFields.has(f.name)).length - 10} more</span>
                               )}
                             </div>
                           </div>
@@ -493,7 +725,7 @@ export default function PreviewStep({
             <div className="flex items-center">
               <CheckCircleIcon className="h-5 w-5 text-green-600 mr-2" />
               <span className="text-sm text-gray-700">
-                {session.globalSettings?.createTestData ? 'Generate realistic test data' : 'Generate random data'}
+                {aiPlan ? 'AI-enhanced data generation active' : 'Pattern-based data generation'}
               </span>
             </div>
           </div>
@@ -507,10 +739,10 @@ export default function PreviewStep({
           <div className="text-sm">
             <p className="text-amber-800 font-medium mb-1">Important:</p>
             <ul className="text-amber-700 space-y-1">
-              <li>• This will create real data in your Salesforce org</li>
-              <li>• Generated records cannot be easily bulk deleted</li>
-              <li>• Consider using a sandbox or developer org for testing</li>
-              <li>• Large datasets may impact org performance during generation</li>
+              <li>This will create real data in your Salesforce org</li>
+              <li>Generated records cannot be easily bulk deleted</li>
+              <li>Consider using a sandbox or developer org for testing</li>
+              <li>Large datasets may impact org performance during generation</li>
             </ul>
           </div>
         </div>
@@ -521,7 +753,7 @@ export default function PreviewStep({
         <button onClick={() => onPrevious('configuration')} className="btn-outline">
           Back to Configuration
         </button>
-        <button 
+        <button
           onClick={handleStartGeneration}
           disabled={isGenerating || generationSummary.totalRecords === 0}
           className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"

@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -6,7 +7,9 @@ const { createServer } = require('http');
 const { Server: SocketIOServer } = require('socket.io');
 const { v4: uuidv4 } = require('uuid');
 const { faker } = require('@faker-js/faker');
-const { FieldDataGenerator, SALESFORCE_FIELD_TYPES } = require('./lib/salesforce-field-types');
+const { FieldDataGenerator, SALESFORCE_FIELD_TYPES, AIPlanGenerator } = require('./lib/salesforce-field-types');
+const { analyzeFields: aiAnalyzeFields, applyOverrides: aiApplyOverrides } = require('./services/ai-field-mapper');
+const { buildCorrelatedContext, generateFromLibrary, listAvailableGenerators } = require('./lib/field-data-library');
 const { getCachedMapping, getRandomStateForCountry } = require('./lib/picklist-decoder');
 const archiver = require('archiver');
 const jsforce = require('jsforce');
@@ -598,9 +601,176 @@ app.put('/api/preferences/data-generation/:sessionId', (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// AI Generation Plan Endpoints
+// ---------------------------------------------------------------------------
+
+// Trigger AI field analysis for a session
+app.post('/api/ai/analyze-fields/:sessionId', async (req, res) => {
+  try {
+    const sessionId = req.params.sessionId;
+    const sessionData = sessions.get(sessionId);
+
+    if (!sessionData) {
+      return res.status(404).json({ success: false, error: 'Session not found', timestamp: new Date().toISOString() });
+    }
+
+    if (!sessionData.fieldAnalysis || Object.keys(sessionData.fieldAnalysis).length === 0) {
+      return res.status(400).json({ success: false, error: 'No field analysis data. Run field discovery first.', timestamp: new Date().toISOString() });
+    }
+
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return res.status(400).json({ success: false, error: 'ANTHROPIC_API_KEY not configured on server', timestamp: new Date().toISOString() });
+    }
+
+    io.to(sessionId).emit('progress', { message: 'Analyzing fields with AI...', progress: 10 });
+
+    const plan = await aiAnalyzeFields(sessionData.fieldAnalysis, apiKey);
+
+    if (!plan) {
+      return res.json({ success: false, error: 'AI analysis returned no results', timestamp: new Date().toISOString() });
+    }
+
+    // Cache plan in session
+    sessionData.aiGenerationPlan = plan;
+    sessions.set(sessionId, sessionData);
+    // sessions.set() auto-saves via PersistentStorage
+
+    io.to(sessionId).emit('progress', { message: 'AI field analysis complete', progress: 100 });
+
+    res.json({
+      success: true,
+      data: plan,
+      objectCount: Object.keys(plan).length,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('AI analyze-fields error:', error);
+    res.status(500).json({ success: false, error: error.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// Get current AI generation plan
+app.get('/api/ai/generation-plan/:sessionId', (req, res) => {
+  const sessionData = sessions.get(req.params.sessionId);
+  if (!sessionData) {
+    return res.status(404).json({ success: false, error: 'Session not found', timestamp: new Date().toISOString() });
+  }
+
+  res.json({
+    success: true,
+    data: sessionData.aiGenerationPlan || null,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Save user overrides to the AI generation plan
+app.put('/api/ai/generation-plan/:sessionId', (req, res) => {
+  try {
+    const sessionId = req.params.sessionId;
+    const sessionData = sessions.get(sessionId);
+
+    if (!sessionData) {
+      return res.status(404).json({ success: false, error: 'Session not found', timestamp: new Date().toISOString() });
+    }
+
+    const { overrides, companyProfile } = req.body;
+
+    if (overrides && sessionData.aiGenerationPlan) {
+      sessionData.aiGenerationPlan = aiApplyOverrides(sessionData.aiGenerationPlan, overrides);
+    }
+
+    if (companyProfile) {
+      sessionData.aiCompanyProfile = companyProfile;
+    }
+
+    sessions.set(sessionId, sessionData);
+    // sessions.set() auto-saves via PersistentStorage
+
+    res.json({ success: true, data: sessionData.aiGenerationPlan, timestamp: new Date().toISOString() });
+  } catch (error) {
+    console.error('AI plan update error:', error);
+    res.status(500).json({ success: false, error: error.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// Generate sample records using the AI plan (for preview)
+app.get('/api/ai/sample-values/:sessionId/:objectName', (req, res) => {
+  try {
+    const { sessionId, objectName } = req.params;
+    const count = Math.min(parseInt(req.query.count) || 5, 10);
+    const sessionData = sessions.get(sessionId);
+
+    if (!sessionData) {
+      return res.status(404).json({ success: false, error: 'Session not found', timestamp: new Date().toISOString() });
+    }
+
+    const fieldAnalysis = sessionData.fieldAnalysis?.[objectName];
+    if (!fieldAnalysis?.fields) {
+      return res.status(404).json({ success: false, error: `No field analysis for ${objectName}`, timestamp: new Date().toISOString() });
+    }
+
+    const aiPlan = sessionData.aiGenerationPlan?.[objectName] || null;
+    const companyProfile = sessionData.aiCompanyProfile || 'medium';
+    const preferences = sessionData.dataGenerationPreferences || null;
+
+    const writableFields = fieldAnalysis.fields.filter(f =>
+      f.createable !== false &&
+      !f.calculated &&
+      !f.calculatedFormula &&
+      !f.autoNumber &&
+      f.type !== 'calculated' &&
+      f.type !== 'summary'
+    );
+
+    const records = [];
+    for (let i = 0; i < count; i++) {
+      const recordContext = { recordIndex: i, selectedCountries: {} };
+      const correlatedCtx = aiPlan ? buildCorrelatedContext(aiPlan, i, companyProfile, preferences?.selectedCountries) : {};
+      const record = {};
+
+      for (const field of writableFields) {
+        let value;
+        if (aiPlan) {
+          value = AIPlanGenerator.generateValueWithPlan(
+            field, i, objectName,
+            { preferences },
+            recordContext, aiPlan, correlatedCtx
+          );
+          // SKIP_FIELD sentinel: don't set this field, don't fall back
+          if (value === AIPlanGenerator.SKIP_FIELD) continue;
+        } else {
+          value = FieldDataGenerator.generateValue(field, i, objectName, { preferences }, recordContext);
+        }
+        if (value !== null && value !== undefined) {
+          record[field.name] = value;
+        }
+      }
+      records.push(record);
+    }
+
+    res.json({ success: true, data: records, timestamp: new Date().toISOString() });
+  } catch (error) {
+    console.error('AI sample-values error:', error);
+    res.status(500).json({ success: false, error: error.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// List available library categories (for UI dropdowns)
+app.get('/api/ai/categories', (_req, res) => {
+  res.json({
+    success: true,
+    data: listAvailableGenerators(),
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ---------------------------------------------------------------------------
+
 app.get('/api/sessions/:sessionId', (req, res) => {
   const session = sessions.get(req.params.sessionId);
-  
+
   if (!session) {
     return res.status(404).json({
       success: false,
@@ -608,7 +778,7 @@ app.get('/api/sessions/:sessionId', (req, res) => {
       timestamp: new Date().toISOString()
     });
   }
-  
+
   res.json({
     success: true,
     data: session,
@@ -2874,7 +3044,7 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
     }
     
     // PRIORITY 4: Exclude system fields and other read-only types
-    return !isSystemField(field.name) && 
+    return !isSystemField(field.name, objectName) &&
       field.type !== 'calculated' &&
       field.type !== 'summary' &&
       !field.autoNumber;
@@ -2920,7 +3090,12 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
     const record = {};
     
     // Create record context for tracking field relationships (e.g., country-state alignment)
-    const recordContext = { recordIndex: i, selectedCountries: {} };
+    const sessionData = sessions.get(sessionId);
+    const aiPlan = sessionData?.aiGenerationPlan?.[objectName] || null;
+    const companyProfile = sessionData?.aiCompanyProfile || 'medium';
+    const selectedCountries = sessionData?.dataGenerationPreferences?.selectedCountries || null;
+    const correlatedCtx = aiPlan ? buildCorrelatedContext(aiPlan, i, companyProfile, selectedCountries) : {};
+    const recordContext = { recordIndex: i, selectedCountries: {}, _correlatedCtx: correlatedCtx };
     
     // Sort required fields to ensure CountryCode fields are processed before StateCode fields
     const sortedRequiredFields = [...requiredFields].sort((a, b) => {
@@ -3044,13 +3219,19 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
 }
 
 // Check if field is a system field that cannot be written
-function isSystemField(fieldName) {
+function isSystemField(fieldName, objectName = '') {
   // Use the standard rules dictionary
   if (STANDARD_FIELD_RULES.systemFields.includes(fieldName)) {
     return true;
   }
-  
+
   if (STANDARD_FIELD_RULES.calculatedFields.includes(fieldName)) {
+    return true;
+  }
+
+  // Person Account name fields — block only on Account (Business Accounts can't write these)
+  // These are required/writable on Contact and Lead
+  if (objectName === 'Account' && ['FirstName', 'LastName', 'Salutation'].includes(fieldName)) {
     return true;
   }
   
@@ -3096,8 +3277,8 @@ const STANDARD_FIELD_RULES = {
     'PersonOtherLatitude', 'PersonOtherLongitude',
     // Person Account read-only fields
     'IsPersonAccount', 'PersonLastCUUpdateDate', 'PersonLastCURequestDate',
-    // Person Account fields that shouldn't be on Business Accounts  
-    'FirstName', 'MiddleName', 'LastName', 'Salutation', 'Suffix',
+    // Person Account name fields — handled by isSystemField() with object check
+    'MiddleName', 'Suffix',
     // State/Country dependent picklist fields (complex validation)
     'PersonOtherState', 'PersonMailingState', 'BillingState', 'ShippingState',
     // Contact read-only system fields
@@ -3849,28 +4030,60 @@ function generateFieldValueWithContext(field, index, objectName = '', sessionId 
     }
   }
   
+  // Handle reference fields by looking up previously generated record IDs
+  if (field.type === 'reference' && field.referenceTo && field.referenceTo.length > 0) {
+    const referenceObject = field.referenceTo[0];
+    if (generatedRecordIds[referenceObject] && generatedRecordIds[referenceObject].length > 0) {
+      const availableIds = generatedRecordIds[referenceObject];
+      return availableIds[index % availableIds.length];
+    }
+    // No IDs available for this reference — skip (return null, not undefined)
+    return null;
+  }
+
   // Get session data for smart generation features
   const session = sessions.get(sessionId);
   const stateCountryMappings = session?.stateCountryMappings || {};
   const preferences = session?.dataGenerationPreferences || null;
-  
-  // Use the new metadata-driven generator with smart mappings, record context, and user preferences
-  const value = FieldDataGenerator.generateValue(field, index, objectName, {
-    referenceId: null, // Will be handled by relationship logic
+  const options = {
+    referenceId: null,
     stateCountryMappings: stateCountryMappings,
-    preferences: preferences // Pass user preferences for org-specific generation
-  }, recordContext);
-  
-  // If generator returns a value, ensure it meets field constraints
+    preferences: preferences
+  };
+
+  // If an AI generation plan exists for this object, use it
+  const aiPlan = session?.aiGenerationPlan?.[objectName] || null;
+  if (aiPlan) {
+    const companyProfile = session?.aiCompanyProfile || 'medium';
+    const correlatedCtx = recordContext._correlatedCtx || buildCorrelatedContext(aiPlan, index, companyProfile, preferences?.selectedCountries);
+    const value = AIPlanGenerator.generateValueWithPlan(field, index, objectName, options, recordContext, aiPlan, correlatedCtx);
+
+    // SKIP_FIELD sentinel means "don't set this field at all" — no fallback
+    if (value === AIPlanGenerator.SKIP_FIELD) {
+      return undefined;
+    }
+
+    if (value !== null && value !== undefined) {
+      if ((field.type === 'string' || field.type === 'textarea') && field.length) {
+        if (typeof value === 'string' && value.length > field.length) {
+          return value.substring(0, field.length);
+        }
+      }
+      return value;
+    }
+  }
+
+  // Fallback: use the metadata-driven generator
+  const value = FieldDataGenerator.generateValue(field, index, objectName, options, recordContext);
+
   if (value !== null && value !== undefined) {
-    // Handle string length constraints
     if ((field.type === 'string' || field.type === 'textarea') && field.length) {
       if (typeof value === 'string' && value.length > field.length) {
         return value.substring(0, field.length);
       }
     }
   }
-  
+
   return value;
 }
 
