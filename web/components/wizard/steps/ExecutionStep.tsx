@@ -43,6 +43,7 @@ interface ExecutionProgress {
   generatedRecords: number;
   loadedRecords: number;
   startTime?: Date;
+  endTime?: Date;
   estimatedEndTime?: Date;
   objectProgress: { [key: string]: ObjectProgress };
   loadSessionId?: string;

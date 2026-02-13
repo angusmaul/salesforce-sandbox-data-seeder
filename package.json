@@ -26,12 +26,12 @@
   "license": "MIT",
   "dependencies": {
     "@faker-js/faker": "^8.4.1",
-    "@modelcontextprotocol/sdk": "^1.17.2",
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^4.1.2",
     "commander": "^11.1.0",
     "conf": "^10.2.0",
-    "inquirer": "^9.2.12",
-    "jsforce": "^3.10.0",
+    "inquirer": "^9.3.8",
+    "jsforce": "^3.10.8",
     "ora": "^5.4.1"
   },
   "devDependencies": {

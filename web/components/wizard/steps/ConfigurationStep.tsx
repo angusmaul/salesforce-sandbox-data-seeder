@@ -140,7 +140,7 @@ export default function ConfigurationStep({
     Object.entries(configurations).forEach(([objectName, config]) => {
       if (!config.enabled) return;
       
-      const fieldAnalysis = session.fieldAnalysis[objectName];
+      const fieldAnalysis = session.fieldAnalysis?.[objectName];
       if (!fieldAnalysis?.fields) return;
 
       // Calculate average record size based on field types and lengths

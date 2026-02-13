@@ -433,7 +433,7 @@ export default function SelectionStep({
                       <p className="text-sm text-gray-600">{obj.label}</p>
                       <div className="flex items-center space-x-4 text-xs text-gray-500 mt-1">
                         <span>
-                          {obj.fieldCount ? `${obj.fieldCount} fields` : 'Fields will be analyzed after selection'}
+                          {(obj as any).fieldCount ? `${(obj as any).fieldCount} fields` : 'Fields will be analyzed after selection'}
                         </span>
                         {!isCreateable && <span className="text-red-500">Not createable</span>}
                       </div>
