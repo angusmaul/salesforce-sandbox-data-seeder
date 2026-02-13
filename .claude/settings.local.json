@@ -45,7 +45,14 @@
       "Bash(gh extension:*)",
       "WebFetch(domain:)",
       "Bash(gh issue view:*)",
-      "Bash(gh issue list:*)"
+      "Bash(gh issue list:*)",
+      "Bash(dir:*)",
+      "mcp__plugin_playwright_playwright__browser_navigate",
+      "Bash(node -c:*)",
+      "Bash(node:*)",
+      "Bash(powershell:*)",
+      "Skill(commit-commands:commit-push-pr)",
+      "Skill(commit-commands:commit-push-pr:*)"
     ],
     "additionalDirectories": [
       "/tmp"

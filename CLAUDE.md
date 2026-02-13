@@ -1,87 +1,144 @@
-# CLAUDE.md
+# Salesforce Sandbox Data Seeder
 
-> Think carefully and implement the most concise solution that changes as little code as possible.
+## Project Overview
 
-## USE SUB-AGENTS FOR CONTEXT OPTIMIZATION
+A tool for discovering Salesforce sandbox data models and generating realistic sample data for testing and development. Provides both a CLI interface and a web-based wizard with real-time progress tracking.
 
-### 1. Always use the file-analyzer sub-agent when asked to read files.
-The file-analyzer agent is an expert in extracting and summarizing critical information from files, particularly log files and verbose outputs. It provides concise, actionable summaries that preserve essential information while dramatically reducing context usage.
+## Architecture
 
-### 2. Always use the code-analyzer sub-agent when asked to search code, analyze code, research bugs, or trace logic flow.
+### Two Entry Points
 
-The code-analyzer agent is an expert in code analysis, logic tracing, and vulnerability detection. It provides concise, actionable summaries that preserve essential information while dramatically reducing context usage.
+1. **CLI** (`src/index.ts`) — Commander.js CLI, compiled to `dist/index.js`, binary name `sf-seed`
+2. **Web** (`web/`) — Next.js frontend (port 3000) + Express.js backend (port 3001)
 
-### 3. Always use the test-runner sub-agent to run tests and analyze the test results.
+### Directory Layout
 
-Using the test-runner agent ensures:
+```
+src/                          # CLI tool (TypeScript, CommonJS)
+  commands/                   # discover, seed, config commands
+  generators/data-generator.ts  # FieldDataGenerator class
+  models/salesforce.ts        # Core type definitions
+  services/                   # Salesforce API, discovery, bulk loading
+web/
+  pages/                      # Next.js pages (wizard.tsx is the main UI)
+  components/wizard/steps/    # 7-step wizard: Auth → Discovery → Selection → Config → Preview → Execution → Results
+  hooks/                      # useSession, useWebSocket
+  server/
+    demo-server.js            # Express backend monolith (~4300 lines)
+    lib/
+      salesforce-field-types.js   # FieldDataGenerator, AIPlanGenerator, WESTERN_COUNTRIES_DATA
+      field-data-library.js       # Semantic generators by category, correlation maps
+      picklist-decoder.js         # Picklist value decoding
+    services/
+      ai-field-mapper.js          # Claude Haiku field classification
+  shared/types/api.ts         # Shared types — re-exports from src/models/salesforce
+config/presets/               # Object selection presets (sales-cloud, minimal, etc.)
+```
 
-- Full test output is captured for debugging
-- Main conversation stays clean and focused
-- Context usage is optimized
-- All issues are properly surfaced
-- No approval dialogs interrupt the workflow
+### Key Components
 
-## Philosophy
+- **PersistentStorage** — File-based JSON session storage (`.sessions.json`). `sessions.set(key, value)` auto-saves; there is no manual save method.
+- **FieldDataGenerator** (`salesforce-field-types.js`) — Core data generation using Faker.js with field-type-aware logic.
+- **AIPlanGenerator** (`salesforce-field-types.js`) — Wraps field-data-library with fallback to FieldDataGenerator when AI plan is unavailable.
+- **AI Field Mapper** (`ai-field-mapper.js`) — Uses Claude Haiku to classify Salesforce fields into semantic categories via batched analysis.
+- **Field Data Library** (`field-data-library.js`) — 8 categories, 66 subcategories of semantic generators with correlation maps.
 
-### Error Handling
+## Development
 
-- **Fail fast** for critical configuration (missing text model)
-- **Log and continue** for optional features (extraction model)
-- **Graceful degradation** when external services unavailable
-- **User-friendly messages** through resilience layer
+### Setup
 
-### Testing
+```bash
+# CLI
+npm install
+npm run dev              # Run CLI via ts-node
 
-- Always use the test-runner agent to execute tests.
-- Do not use mock services for anything ever.
-- Do not move on to the next test until the current test is complete.
-- If the test fails, consider checking if the test is structured correctly before deciding we need to refactor the codebase.
-- Tests to be verbose so we can use them for debugging.
+# Web
+cd web
+npm install
+cp .env.example .env     # Configure environment variables
+npm run dev              # Starts both server (3001) and client (3000)
+```
 
+### Environment Variables (web/.env)
 
-## Tone and Behavior
+```
+PORT=3001
+NEXT_PUBLIC_SERVER_URL=http://localhost:3001
+NEXT_PUBLIC_WS_URL=ws://localhost:3001
+CLIENT_URL=http://localhost:3000
+SF_CLIENT_ID=...
+SF_CLIENT_SECRET=...
+ANTHROPIC_API_KEY=...       # Optional, enables AI field classification
+```
 
-- Criticism is welcome. Please tell me when I am wrong or mistaken, or even when you think I might be wrong or mistaken.
-- Please tell me if there is a better approach than the one I am taking.
-- Please tell me if there is a relevant standard or convention that I appear to be unaware of.
-- Be skeptical.
-- Be concise.
-- Short summaries are OK, but don't give an extended breakdown unless we are working through the details of a plan.
-- Do not flatter, and do not give compliments unless I am specifically asking for your judgement.
-- Occasional pleasantries are fine.
-- Feel free to ask many questions. If you are in doubt of my intent, don't guess. Ask.
+### Running Tests
 
-## ABSOLUTE RULES:
+```bash
+# Root (CLI tests) — uses jest.config.js with ts-jest preset
+npm test
 
-- NO PARTIAL IMPLEMENTATION
-- NO SIMPLIFICATION : no "//This is simplified stuff for now, complete implementation would blablabla"
-- NO CODE DUPLICATION : check existing codebase to reuse functions and constants Read files before writing new functions. Use common sense function name to find them easily.
-- NO DEAD CODE : either use or delete from codebase completely
-- IMPLEMENT TEST FOR EVERY FUNCTIONS
-- NO CHEATER TESTS : test must be accurate, reflect real usage and be designed to reveal flaws. No useless tests! Design tests to be verbose so we can use them for debuging.
-- NO INCONSISTENT NAMING - read existing codebase naming patterns.
-- NO OVER-ENGINEERING - Don't add unnecessary abstractions, factory patterns, or middleware when simple functions would work. Don't think "enterprise" when you need "working"
-- NO MIXED CONCERNS - Don't put validation logic inside API handlers, database queries inside UI components, etc. instead of proper separation
-- NO RESOURCE LEAKS - Don't forget to close database connections, clear timeouts, remove event listeners, or clean up file handles
+# Web server tests — plain JS, run directly
+npx jest web/server/lib/field-data-library.test.js --verbose
+npx jest web/server/services/ai-field-mapper.test.js --verbose
+```
 
-## Project-Specific Instructions
+There is no jest config in `web/`; web server tests are plain JS and run with `npx jest <path> --verbose` from the project root.
 
-### Memory Management for Parallel Operations
+### Build
 
-When working with CCPM parallel sync operations:
+```bash
+# CLI
+npm run build            # tsc → dist/
 
-1. **Node.js Heap Configuration**: Set `NODE_OPTIONS="--max-old-space-size=8192"` for 8GB heap limit
-2. **Batch GitHub API Calls**: Process issues in chunks of 50-100 instead of fetching all at once
-3. **Limit Concurrent Agents**: Respect the documented 5-8 parallel task limit
-4. **Implement Streaming**: Process and release data incrementally rather than accumulating
-5. **Add Cleanup Cycles**: Clear reference stores and temporary objects periodically
-6. **Monitor Memory Usage**: Use `process.memoryUsage()` to track heap consumption during operations
+# Web
+cd web
+npm run build            # server:build + client:build
+npm start                # Runs compiled server
+```
 
-## Testing
+## Code Conventions
 
-Always run tests before committing:
-- `npm test` or equivalent for your stack
+### Language Split
+- **Server files** (`web/server/`): Plain JavaScript (CommonJS `require`)
+- **Frontend** (`web/pages/`, `web/components/`): TypeScript React
+- **CLI** (`src/`): TypeScript (CommonJS output)
 
-## Code Style
+### API Endpoints
+All web API endpoints follow the pattern: `app.get|post|put('/api/<domain>/<action>/:sessionId')`
 
-Follow existing patterns in the codebase.
+Key endpoint groups:
+- `/api/auth/*` — OAuth client credentials, status
+- `/api/discovery/*` — Object and field discovery
+- `/api/selection/*` — Object selection and analysis
+- `/api/config/*` — Configuration management
+- `/api/execution/*` — Data loading execution and results
+- `/api/generation/*` — Generation plan and preview
+- `/api/ai/*` — AI classification, plan management, categories
+- `/api/logs/*` — Log download
+
+### Data Generation Pipeline
+Three-layer approach:
+1. **AI classification** (Claude Haiku) — Analyzes field schemas once, assigns semantic categories
+2. **Semantic library lookup** — Generates correlated data by category (department/job title, country/phone format, etc.)
+3. **Fallback** — Generic Faker.js generation via FieldDataGenerator
+
+Correlation context is built per-record via `buildCorrelatedContext()` and passed through `_correlatedCtx` on `recordContext`.
+
+### Session Management
+- Sessions stored in memory + file (`.sessions.json`)
+- OAuth configs persisted in `.oauth-configs.json`
+- AI plans cached in `session.aiGenerationPlan`, profiles in `session.aiCompanyProfile`
+- 24-hour expiration cleanup
+
+## Important Patterns
+
+- `WESTERN_COUNTRIES_DATA` in `salesforce-field-types.js` defines AU, US, CA, GB with state/province codes
+- State/Country text fields are skipped when corresponding code fields exist (Salesforce auto-populates text from codes)
+- `isSystemField()` is object-aware — Contact/Lead `LastName` and `FirstName` are not treated as system fields
+- Reference fields use previously generated record IDs for parent-child relationships
+- Download functionality uses `window.location.href` (not `window.open`) to avoid popup blockers
+- WebSocket (Socket.IO) provides real-time progress updates during execution
+
+## Node.js Requirements
+- CLI: Node.js >= 16
+- Web: Node.js >= 18
