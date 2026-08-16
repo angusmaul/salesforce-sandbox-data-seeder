@@ -51,8 +51,9 @@ class PersistentStorage {
   constructor(filePath, defaultData = {}) {
     this.filePath = filePath;
     this.data = this.load() || defaultData;
+    this._saveTimer = null;
   }
-  
+
   load() {
     try {
       if (fs.existsSync(this.filePath)) {
@@ -64,38 +65,58 @@ class PersistentStorage {
     }
     return null;
   }
-  
+
+  // Atomic write: a kill mid-write leaves the old file intact instead of truncated JSON
   save() {
     try {
-      fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2));
+      const tmpPath = `${this.filePath}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(this.data, null, 2));
+      fs.renameSync(tmpPath, this.filePath);
     } catch (error) {
       console.error(`Failed to save ${this.filePath}:`, error.message);
     }
   }
-  
+
+  // Coalesce bursts of updates into one disk write; flush() runs any pending write now
+  scheduleSave() {
+    if (this._saveTimer) return;
+    this._saveTimer = setTimeout(() => {
+      this._saveTimer = null;
+      this.save();
+    }, 500);
+  }
+
+  flush() {
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = null;
+    }
+    this.save();
+  }
+
   get(key) {
     return this.data[key];
   }
-  
+
   set(key, value) {
     this.data[key] = value;
-    this.save();
+    this.scheduleSave();
   }
-  
+
   has(key) {
     return key in this.data;
   }
-  
+
   delete(key) {
     delete this.data[key];
-    this.save();
+    this.scheduleSave();
   }
-  
+
   clear() {
     this.data = {};
-    this.save();
+    this.scheduleSave();
   }
-  
+
   entries() {
     return Object.entries(this.data);
   }
@@ -4340,5 +4361,33 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`🔗 API URL: ${SERVER_URL}/api`);
   console.log(`🌐 Allowed client origin(s): ${CLIENT_ORIGINS.join(', ')}`);
 });
+
+// Graceful shutdown: docker stop / systemctl stop send SIGTERM and force-kill
+// after a grace period, so flush state and close connections while we can.
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received, shutting down...`);
+
+  // Open keep-alive/WebSocket connections can stall close callbacks; don't
+  // outlive the orchestrator's grace period (Docker default: 10s).
+  const forceTimer = setTimeout(() => {
+    console.error('Forced shutdown after 8s');
+    process.exit(1);
+  }, 8000);
+  forceTimer.unref();
+
+  sessions.flush();
+  oauthConfigs.flush();
+
+  // io.close() also closes the underlying HTTP server
+  io.close(() => {
+    console.log('Shutdown complete');
+    process.exit(0);
+  });
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 module.exports = app;
