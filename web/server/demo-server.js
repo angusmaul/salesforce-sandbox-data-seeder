@@ -132,6 +132,15 @@ const oauthConfigs = new PersistentStorage(OAUTH_FILE);
 // (oauthConfigs is the legacy per-session store, kept for fallback during migration.)
 const CONNECTIONS_FILE = path.join(DATA_DIR, '.connections.json');
 const connections = new PersistentStorage(CONNECTIONS_FILE);
+// Global user preferences (e.g. data-generation countries) — sessions are
+// ephemeral (24h), so per-session storage silently reset these every run.
+const PREFERENCES_FILE = path.join(DATA_DIR, '.preferences.json');
+const preferencesStore = new PersistentStorage(PREFERENCES_FILE);
+
+// Session preferences override the global default, which overrides the built-in
+function getDataGenerationPreferences(session) {
+  return session?.dataGenerationPreferences || preferencesStore.get('dataGeneration') || null;
+}
 
 console.log(`💾 Loaded ${Object.keys(sessions.data).length} existing sessions and ${Object.keys(connections.data).length} saved connections from storage`);
 
@@ -921,7 +930,8 @@ app.get('/api/preferences/data-generation/:sessionId', (req, res) => {
       });
     }
     
-    const preferences = session.dataGenerationPreferences || {
+    // Session override → saved global default → built-in default
+    const preferences = getDataGenerationPreferences(session) || {
       selectedCountries: ['AU', 'US', 'CA', 'GB'], // Default Western countries
       useOrgPicklists: true,
       customStateMapping: {},
@@ -961,16 +971,15 @@ app.put('/api/preferences/data-generation/:sessionId', (req, res) => {
       ...req.body,
       savedAt: new Date()
     };
-    
-    // Update session with new preferences
-    const updatedSession = {
-      ...session,
-      dataGenerationPreferences: preferences,
-      updatedAt: new Date()
-    };
-    
-    sessions.set(sessionId, updatedSession);
-    
+
+    // Mutate in place (never replace the object — long-running endpoints hold
+    // a reference across awaits and a swap turns their write-back into a
+    // lost-update clobber), and persist globally so new sessions inherit it.
+    session.dataGenerationPreferences = preferences;
+    session.updatedAt = new Date();
+    sessions.set(sessionId, session);
+    preferencesStore.set('dataGeneration', preferences);
+
     console.log(`💾 Data generation preferences saved for session: ${sessionId}`);
     console.log(`🌍 Selected countries: ${preferences.selectedCountries?.join(', ') || 'None'}`);
     
@@ -1189,7 +1198,7 @@ app.get('/api/ai/sample-values/:sessionId/:objectName', (req, res) => {
 
     const aiPlan = sessionData.aiGenerationPlan?.[objectName] || null;
     const companyProfile = sessionData.aiCompanyProfile || 'medium';
-    const preferences = sessionData.dataGenerationPreferences || null;
+    const preferences = getDataGenerationPreferences(sessionData);
 
     const writableFields = fieldAnalysis.fields.filter(f =>
       f.createable !== false &&
@@ -3611,7 +3620,7 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
     const sessionData = sessions.get(sessionId);
     const aiPlan = sessionData?.aiGenerationPlan?.[objectName] || null;
     const companyProfile = sessionData?.aiCompanyProfile || 'medium';
-    const selectedCountries = sessionData?.dataGenerationPreferences?.selectedCountries || null;
+    const selectedCountries = getDataGenerationPreferences(sessionData)?.selectedCountries || null;
     const correlatedCtx = aiPlan ? buildCorrelatedContext(aiPlan, i, companyProfile, selectedCountries) : {};
     const recordContext = { recordIndex: i, selectedCountries: {}, _correlatedCtx: correlatedCtx };
     
@@ -4570,7 +4579,7 @@ function generateFieldValueWithContext(field, index, objectName = '', sessionId 
   // Get session data for smart generation features
   const session = sessions.get(sessionId);
   const stateCountryMappings = session?.stateCountryMappings || {};
-  const preferences = session?.dataGenerationPreferences || null;
+  const preferences = getDataGenerationPreferences(session);
   const options = {
     referenceId: null,
     stateCountryMappings: stateCountryMappings,
