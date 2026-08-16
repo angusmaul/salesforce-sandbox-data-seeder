@@ -19,8 +19,9 @@ import {
 } from '@heroicons/react/24/outline';
 import {
   WizardSession, WizardStep, AIGenerationPlan,
-  CompanyProfile, CategoryOption
+  CompanyProfile, CategoryOption, AIConfigStatus
 } from '../../../shared/types/api';
+import AISettingsPanel from '../../ai/AISettingsPanel';
 import { Socket } from 'socket.io-client';
 
 interface PreviewStepProps {
@@ -61,12 +62,27 @@ export default function PreviewStep({
   const [sampleRecords, setSampleRecords] = useState<Record<string, any[]>>({});
   const [loadingSamples, setLoadingSamples] = useState<Set<string>>(new Set());
   const [editingField, setEditingField] = useState<{ object: string; field: string } | null>(null);
+  const [aiConfig, setAiConfig] = useState<AIConfigStatus | null>(null);
+  const [showAISettings, setShowAISettings] = useState(false);
 
   // Load categories list for override dropdowns
   useEffect(() => {
     fetch(`/api/ai/categories`)
       .then(r => r.json())
       .then(res => { if (res.success) setCategories(res.data); })
+      .catch(() => {});
+  }, []);
+
+  // Load AI provider availability (drives the banner + settings panel)
+  useEffect(() => {
+    fetch(`/api/ai/config`)
+      .then(r => r.json())
+      .then(res => {
+        if (res.success) {
+          setAiConfig(res.data);
+          if (!res.data.configured) setShowAISettings(true);
+        }
+      })
       .catch(() => {});
   }, []);
 
@@ -381,8 +397,15 @@ export default function PreviewStep({
               </select>
             )}
             <button
+              onClick={() => setShowAISettings(s => !s)}
+              className="text-sm text-indigo-700 hover:text-indigo-900 font-medium"
+            >
+              {showAISettings ? 'Hide settings' : 'AI settings'}
+            </button>
+            <button
               onClick={handleAnalyzeFields}
-              disabled={isAnalyzing}
+              disabled={isAnalyzing || !aiConfig?.configured}
+              title={!aiConfig?.configured ? 'Configure an AI provider first' : undefined}
               className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isAnalyzing ? (
@@ -407,12 +430,19 @@ export default function PreviewStep({
         <p className="text-sm text-indigo-700">
           {aiPlan
             ? `AI has classified fields across ${Object.keys(aiPlan).length} objects. Expand objects below to see mappings, override categories, and preview realistic sample data.`
-            : 'Use AI to analyze your field schemas and generate more realistic, correlated test data. This sends field metadata (not your data) to Claude for classification.'}
+            : aiConfig?.configured
+              ? `Use AI to analyze your field schemas and generate more realistic, correlated test data. Field metadata (not your data) is sent to ${aiConfig.provider === 'ollama' ? `your local Ollama model (${aiConfig.model})` : `${aiConfig.provider === 'anthropic' ? 'Anthropic' : 'your configured endpoint'} (${aiConfig.model})`} for classification.`
+              : 'No AI provider is configured. Set one up below — Anthropic, any OpenAI-compatible endpoint, or a local Ollama model. Without AI, generation still works using pattern-based rules.'}
         </p>
         {aiPlan && companyProfile && (
           <p className="text-xs text-indigo-500 mt-1">
             Record profile: <strong>{PROFILE_OPTIONS.find(p => p.value === companyProfile)?.label}</strong> — {PROFILE_OPTIONS.find(p => p.value === companyProfile)?.description}
           </p>
+        )}
+        {showAISettings && (
+          <div className="mt-4">
+            <AISettingsPanel onConfigChange={setAiConfig} />
+          </div>
         )}
       </div>
 

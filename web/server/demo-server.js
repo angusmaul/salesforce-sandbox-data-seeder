@@ -10,6 +10,7 @@ const { v4: uuidv4 } = require('uuid');
 const { faker } = require('@faker-js/faker');
 const { FieldDataGenerator, SALESFORCE_FIELD_TYPES, AIPlanGenerator } = require('./lib/salesforce-field-types');
 const { analyzeFields: aiAnalyzeFields, applyOverrides: aiApplyOverrides } = require('./services/ai-field-mapper');
+const aiProviders = require('./services/ai-providers');
 const { buildCorrelatedContext, generateFromLibrary, listAvailableGenerators } = require('./lib/field-data-library');
 const { getCachedMapping, getRandomStateForCountry } = require('./lib/picklist-decoder');
 const archiver = require('archiver');
@@ -668,6 +669,90 @@ app.put('/api/preferences/data-generation/:sessionId', (req, res) => {
 // AI Generation Plan Endpoints
 // ---------------------------------------------------------------------------
 
+// Global AI provider configuration (bring-your-own-AI). Stored server-side;
+// the API key is never returned to the client. Falls back to the
+// ANTHROPIC_API_KEY env var so pre-existing deployments keep working.
+const AI_CONFIG_FILE = path.join(DATA_DIR, '.ai-config.json');
+const aiConfigStore = new PersistentStorage(AI_CONFIG_FILE);
+
+function getAIProviderConfig() {
+  const stored = aiConfigStore.get('config');
+  if (stored && stored.provider) {
+    return { ...stored, source: 'ui' };
+  }
+  if (process.env.ANTHROPIC_API_KEY) {
+    return { provider: 'anthropic', apiKey: process.env.ANTHROPIC_API_KEY, source: 'env' };
+  }
+  return null;
+}
+
+function maskAIConfig(config) {
+  if (!config) {
+    return { configured: false, provider: null, model: null, baseUrl: null, apiKeySet: false, source: null };
+  }
+  return {
+    configured: true,
+    provider: config.provider,
+    model: config.model || aiProviders.DEFAULT_MODELS[config.provider] || null,
+    baseUrl: config.baseUrl || aiProviders.DEFAULT_BASE_URLS[config.provider] || null,
+    apiKeySet: !!config.apiKey,
+    source: config.source || 'ui'
+  };
+}
+
+// Current AI provider config (masked)
+app.get('/api/ai/config', (req, res) => {
+  res.json({ success: true, data: maskAIConfig(getAIProviderConfig()), timestamp: new Date().toISOString() });
+});
+
+// Set the AI provider config. An absent/empty apiKey keeps the stored one.
+app.put('/api/ai/config', (req, res) => {
+  try {
+    const { provider, model, baseUrl, apiKey } = req.body;
+    if (!aiProviders.PROVIDERS.includes(provider)) {
+      return res.status(400).json({
+        success: false,
+        error: `provider must be one of: ${aiProviders.PROVIDERS.join(', ')}`,
+        timestamp: new Date().toISOString()
+      });
+    }
+    const existing = aiConfigStore.get('config') || {};
+    const config = {
+      provider,
+      model: (model || '').trim() || null,
+      baseUrl: (baseUrl || '').trim() || null,
+      apiKey: (apiKey && apiKey.trim()) ? apiKey.trim() : (existing.provider === provider ? existing.apiKey : null),
+      updatedAt: new Date()
+    };
+    aiConfigStore.set('config', config);
+    console.log(`🤖 AI provider configured: ${provider} (${config.model || 'default model'})`);
+    res.json({ success: true, data: maskAIConfig({ ...config, source: 'ui' }), timestamp: new Date().toISOString() });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// Test a provider config (body values win; stored/env key fills the gap).
+// For Ollama, also returns the installed model list.
+app.post('/api/ai/config/test', async (req, res) => {
+  try {
+    const { provider, model, baseUrl, apiKey } = req.body || {};
+    const stored = getAIProviderConfig();
+    const candidate = {
+      provider: provider || stored?.provider || 'anthropic',
+      model: (model || '').trim() || undefined,
+      baseUrl: (baseUrl || '').trim() || undefined,
+      apiKey: (apiKey && apiKey.trim())
+        ? apiKey.trim()
+        : (stored && stored.provider === (provider || stored.provider) ? stored.apiKey : undefined)
+    };
+    const result = await aiProviders.testProvider(candidate);
+    res.json({ success: true, data: result, timestamp: new Date().toISOString() });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message, timestamp: new Date().toISOString() });
+  }
+});
+
 // Trigger AI field analysis for a session
 app.post('/api/ai/analyze-fields/:sessionId', async (req, res) => {
   try {
@@ -682,14 +767,14 @@ app.post('/api/ai/analyze-fields/:sessionId', async (req, res) => {
       return res.status(400).json({ success: false, error: 'No field analysis data. Run field discovery first.', timestamp: new Date().toISOString() });
     }
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      return res.status(400).json({ success: false, error: 'ANTHROPIC_API_KEY not configured on server', timestamp: new Date().toISOString() });
+    const providerConfig = getAIProviderConfig();
+    if (!providerConfig) {
+      return res.status(400).json({ success: false, error: 'No AI provider configured. Set one up in AI Settings.', timestamp: new Date().toISOString() });
     }
 
     io.to(sessionId).emit('progress', { message: 'Analyzing fields with AI...', progress: 10 });
 
-    const plan = await aiAnalyzeFields(sessionData.fieldAnalysis, apiKey);
+    const plan = await aiAnalyzeFields(sessionData.fieldAnalysis, providerConfig);
 
     if (!plan) {
       return res.json({ success: false, error: 'AI analysis returned no results', timestamp: new Date().toISOString() });

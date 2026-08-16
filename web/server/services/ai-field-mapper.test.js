@@ -12,9 +12,9 @@ const {
   compactField,
   analyzeFields,
   applyOverrides,
-  BATCH_SIZE,
-  MODEL
+  BATCH_SIZE
 } = require('./ai-field-mapper');
+const { DEFAULT_MODELS, PROVIDERS, resolveConfig } = require('./ai-providers');
 
 // ---------------------------------------------------------------------------
 // compactField
@@ -307,9 +307,21 @@ describe('constants', () => {
     console.log(`  BATCH_SIZE: ${BATCH_SIZE}`);
   });
 
-  test('MODEL is a valid Claude model ID', () => {
-    expect(typeof MODEL).toBe('string');
-    expect(MODEL).toContain('claude');
-    console.log(`  MODEL: ${MODEL}`);
+  test('every provider has a default model', () => {
+    for (const provider of PROVIDERS) {
+      expect(typeof DEFAULT_MODELS[provider]).toBe('string');
+      expect(DEFAULT_MODELS[provider].length).toBeGreaterThan(0);
+    }
+    expect(DEFAULT_MODELS.anthropic).toContain('claude');
+  });
+
+  test('resolveConfig fills defaults and strips trailing slashes', () => {
+    const cfg = resolveConfig({ provider: 'ollama', baseUrl: 'http://host.docker.internal:11434///' });
+    expect(cfg.model).toBe(DEFAULT_MODELS.ollama);
+    expect(cfg.baseUrl).toBe('http://host.docker.internal:11434');
+
+    const anthropicCfg = resolveConfig({ provider: 'anthropic', apiKey: 'k' });
+    expect(anthropicCfg.model).toContain('claude');
+    expect(anthropicCfg.baseUrl).toBe('');
   });
 });

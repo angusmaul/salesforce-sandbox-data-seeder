@@ -1,20 +1,21 @@
 /**
  * AI Field Mapper Service
  *
- * Uses Claude Haiku to classify discovered Salesforce fields into semantic
- * categories from the field-data-library. Runs once after field discovery,
- * caches the result in the session, and every downstream code path falls
- * back gracefully if the AI plan is absent.
+ * Uses the configured AI provider (Anthropic, any OpenAI-compatible endpoint,
+ * or local Ollama — see ai-providers.js) to classify discovered Salesforce
+ * fields into semantic categories from the field-data-library. Runs once after
+ * field discovery, caches the result in the session, and every downstream code
+ * path falls back gracefully if the AI plan is absent.
  */
 
 const { listAvailableGenerators } = require('../lib/field-data-library');
+const { callModel } = require('./ai-providers');
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const BATCH_SIZE = 3; // objects per Claude call (manages prompt size)
-const MODEL = 'claude-haiku-4-5-20251001';
+const BATCH_SIZE = 3; // objects per model call (manages prompt size)
 
 // ---------------------------------------------------------------------------
 // Prompt construction
@@ -213,35 +214,23 @@ function parseJSONLoose(text) {
 // ---------------------------------------------------------------------------
 
 /**
- * Call Claude API with the given messages.
- * @param {string} apiKey - Anthropic API key
+ * Call the configured AI provider and parse the JSON response.
+ * @param {Object} providerConfig - { provider, model?, baseUrl?, apiKey? }
  * @param {string} systemPrompt
  * @param {string} userPrompt
  * @returns {Object|null} parsed JSON response or null on failure
  */
-async function callClaude(apiKey, systemPrompt, userPrompt) {
+async function callAI(providerConfig, systemPrompt, userPrompt) {
+  const text = await callModel(providerConfig, systemPrompt, userPrompt);
+  if (text == null) return null;
+
+  // Strip markdown fences if present
+  const cleaned = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+
   try {
-    const Anthropic = require('@anthropic-ai/sdk');
-    const client = new Anthropic({ apiKey });
-
-    const response = await client.messages.create({
-      model: MODEL,
-      max_tokens: 8192,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }]
-    });
-
-    const text = response.content
-      .filter(block => block.type === 'text')
-      .map(block => block.text)
-      .join('');
-
-    // Strip markdown fences if present
-    const cleaned = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-
     return parseJSONLoose(cleaned);
   } catch (err) {
-    console.error('Claude API call failed:', err.message);
+    console.error('AI response was not parseable JSON:', err.message);
     return null;
   }
 }
@@ -254,7 +243,9 @@ async function callClaude(apiKey, systemPrompt, userPrompt) {
  * Analyze field schemas using AI and return a generation plan.
  *
  * @param {Object} fieldAnalysis - session.fieldAnalysis keyed by objectName
- * @param {string} apiKey - Anthropic API key (process.env.ANTHROPIC_API_KEY)
+ * @param {Object|string} providerConfig - provider config ({ provider, model?,
+ *   baseUrl?, apiKey? }); a bare string is accepted as an Anthropic API key for
+ *   backward compatibility
  * @returns {Object|null} generation plan keyed by objectName, or null if unavailable
  *
  * Plan structure per object:
@@ -263,9 +254,12 @@ async function callClaude(apiKey, systemPrompt, userPrompt) {
  *   correlations: [{ type, fields }]
  * }
  */
-async function analyzeFields(fieldAnalysis, apiKey) {
-  if (!apiKey) {
-    console.log('AI Field Mapper: No API key, skipping AI analysis');
+async function analyzeFields(fieldAnalysis, providerConfig) {
+  if (typeof providerConfig === 'string') {
+    providerConfig = { provider: 'anthropic', apiKey: providerConfig };
+  }
+  if (!providerConfig) {
+    console.log('AI Field Mapper: No AI provider configured, skipping AI analysis');
     return null;
   }
 
@@ -297,7 +291,7 @@ async function analyzeFields(fieldAnalysis, apiKey) {
     console.log(`AI Field Mapper: Processing batch ${batchIndex + 1}/${batches.length} (${batch.map(b => b.objectName).join(', ')})`);
 
     const userPrompt = buildUserPrompt(batch);
-    const result = await callClaude(apiKey, systemPrompt, userPrompt);
+    const result = await callAI(providerConfig, systemPrompt, userPrompt);
 
     if (result?.objects) {
       for (const [objName, objPlan] of Object.entries(result.objects)) {
@@ -363,7 +357,6 @@ module.exports = {
   buildUserPrompt,
   buildCategoryDescription,
   compactField,
-  callClaude,
-  BATCH_SIZE,
-  MODEL
+  callAI,
+  BATCH_SIZE
 };
