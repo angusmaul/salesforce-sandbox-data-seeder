@@ -1497,7 +1497,16 @@ app.post('/api/discovery/analyze-fields/:sessionId', async (req, res) => {
             picklistValues: field.picklistValues,
             // CRITICAL: Include controlling field relationship metadata for dependent picklists
             controllerName: field.controllerName,
-            dependentPicklist: field.dependentPicklist
+            dependentPicklist: field.dependentPicklist,
+            // Numeric bounds (NUMBER_OUTSIDE_VALID_RANGE prevention)
+            precision: field.precision,
+            scale: field.scale,
+            digits: field.digits,
+            // Value constraints
+            restrictedPicklist: field.restrictedPicklist,
+            unique: field.unique,
+            defaultValue: field.defaultValue,
+            compoundFieldName: field.compoundFieldName
           })),
           fieldCount: describe.fields.length,
           relationships: describe.fields.filter(field => field.type === 'reference').map(field => ({
@@ -2423,7 +2432,9 @@ async function createStandardPricebookEntries(productIds, standardPricebookId, f
       version: connInfo.apiVersion || '59.0'
     });
     
-    const results = await conn.sobject('PricebookEntry').create(standardEntries);
+    // allowRecursive: jsforce only chunks past the 200-record sObject
+    // Collections limit when this is set — without it, >200 records fails wholesale
+    const results = await conn.sobject('PricebookEntry').create(standardEntries, { allowRecursive: true });
     const resultsArray = Array.isArray(results) ? results : [results];
     const successfulRecords = resultsArray.filter(r => r.success);
     
@@ -2604,7 +2615,9 @@ async function startDataGeneration(sessionId, configuration, globalSettings, fie
           io.to(sessionId).emit('execution-log', `Sample record fields: ${Object.keys(records[0]).join(', ')}`);
           
           try {
-            const results = await conn.sobject(objectName).create(records);
+            // allowRecursive: jsforce only chunks past the 200-record sObject
+            // Collections limit when this is set — without it, >200 records fails wholesale
+            const results = await conn.sobject(objectName).create(records, { allowRecursive: true });
             const resultsArray = Array.isArray(results) ? results : [results];
             const successCount = resultsArray.filter(r => r.success).length;
             const failures = resultsArray.filter(r => !r.success);
@@ -2621,16 +2634,24 @@ async function startDataGeneration(sessionId, configuration, globalSettings, fie
               timeTaken: `${objectEndTime.getTime() - objectStartTime.getTime()}ms`,
               generatedData: records,
               results: {
-                successful: resultsArray.filter(r => r.success).map((result, index) => ({
-                  recordIndex: index + 1,
-                  recordId: result.id,
-                  data: records[resultsArray.indexOf(result)]
-                })),
-                failed: failures.map((failure, index) => ({
-                  recordIndex: resultsArray.indexOf(failure) + 1,
-                  data: records[resultsArray.indexOf(failure)],
-                  errors: failure.errors || [{ message: 'Unknown error', statusCode: 'UNKNOWN' }]
-                }))
+                // Results are input-ordered, so position IS the record index.
+                // (indexOf misattributes records when result objects compare equal.)
+                successful: resultsArray
+                  .map((result, idx) => ({ result, idx }))
+                  .filter(({ result }) => result.success)
+                  .map(({ result, idx }) => ({
+                    recordIndex: idx + 1,
+                    recordId: result.id,
+                    data: records[idx]
+                  })),
+                failed: resultsArray
+                  .map((result, idx) => ({ result, idx }))
+                  .filter(({ result }) => !result.success)
+                  .map(({ result, idx }) => ({
+                    recordIndex: idx + 1,
+                    data: records[idx],
+                    errors: result.errors || [{ message: 'Unknown error', statusCode: 'UNKNOWN' }]
+                  }))
               }
             };
             
@@ -3085,6 +3106,16 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
     }
   }
   
+  // Address integrity: when a StateCode/CountryCode field exists, Salesforce
+  // derives the corresponding text State/Country field from it. Sending both
+  // caused FIELD_INTEGRITY_EXCEPTION ("Mismatched integration value and ISO
+  // code") — the dominant failure class in real load runs.
+  const suppressedAddressTextFields = new Set();
+  for (const f of fieldAnalysis.fields) {
+    const m = f.name.match(/^(Billing|Shipping|Mailing|Other)?(State|Country)Code$/);
+    if (m) suppressedAddressTextFields.add(`${m[1] || ''}${m[2]}`);
+  }
+
   // Filter to writable fields only
   // IMPORTANT: Exclude formula fields (calculated: true or calculatedFormula property)
   const writableFields = fieldAnalysis.fields.filter(field => {
@@ -3106,7 +3137,17 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
       return false;
     }
     
-    // PRIORITY 4: Exclude system fields and other read-only types
+    // PRIORITY 4: Address integrity — never write text twins of code fields,
+    // and GeocodeAccuracy is populated by Salesforce's geocoding service
+    if (suppressedAddressTextFields.has(field.name)) {
+      console.log(`⚠️ Skipping address text field (code twin exists): ${field.name}`);
+      return false;
+    }
+    if (/GeocodeAccuracy$/i.test(field.name)) {
+      return false;
+    }
+
+    // PRIORITY 5: Exclude system fields and other read-only types
     return !isSystemField(field.name, objectName) &&
       field.type !== 'calculated' &&
       field.type !== 'summary' &&
@@ -3173,10 +3214,18 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
       return 0; // Keep original order for other fields
     });
     
+    // Final backstop for address integrity: a StateCode must never be written
+    // without its CountryCode already on the record.
+    const canWriteAddressField = (fieldName) => {
+      const m = fieldName.match(/^(Billing|Shipping|Mailing|Other)?StateCode$/);
+      if (!m) return true;
+      return record[`${m[1] || ''}CountryCode`] !== undefined;
+    };
+
     // Always populate required fields first (in sorted order)
     sortedRequiredFields.forEach(field => {
       const value = generateFieldValueWithContext(field, i, objectName, sessionId, recordContext);
-      if (value !== null && value !== undefined) {
+      if (value !== null && value !== undefined && canWriteAddressField(field.name)) {
         record[field.name] = value;
       }
     });
@@ -3266,7 +3315,7 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
       
       if (shouldPopulate && !selectedFields.has(field.name)) {
         const value = generateFieldValueWithContext(field, i, objectName, sessionId, recordContext);
-        if (value !== null && value !== undefined) {
+        if (value !== null && value !== undefined && canWriteAddressField(field.name)) {
           record[field.name] = value;
           selectedFields.add(field.name);
         }
@@ -4132,7 +4181,7 @@ function generateFieldValueWithContext(field, index, objectName = '', sessionId 
           return value.substring(0, field.length);
         }
       }
-      return value;
+      return clampNumericValue(value, field);
     }
   }
 
@@ -4147,6 +4196,15 @@ function generateFieldValueWithContext(field, index, objectName = '', sessionId 
     }
   }
 
+  return clampNumericValue(value, field);
+}
+
+// Clamp numeric values to the field's precision/scale (NUMBER_OUTSIDE_VALID_RANGE
+// prevention) — applied on both the AI-plan and fallback generation paths.
+function clampNumericValue(value, field) {
+  if (typeof value === 'number' && ['int', 'double', 'currency', 'percent'].includes(field.type)) {
+    return FieldDataGenerator.clampToFieldPrecision(value, field);
+  }
   return value;
 }
 

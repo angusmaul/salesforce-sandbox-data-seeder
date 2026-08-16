@@ -779,7 +779,7 @@ class FieldDataGenerator {
   static extractAddressPrefix(fieldName) {
     if (fieldName.startsWith('Billing')) return 'Billing';
     if (fieldName.startsWith('Shipping')) return 'Shipping';
-    if (fieldName.startsWith('Mailing')) return 'Shipping';
+    if (fieldName.startsWith('Mailing')) return 'Mailing';
     if (fieldName.startsWith('Other')) return 'Other';
     return 'Base'; // For fields like StateCode without prefix
   }
@@ -791,6 +791,52 @@ class FieldDataGenerator {
     const addressPrefix = this.extractAddressPrefix(fieldName);
     const key = `${objectName}.${addressPrefix}`;
     return stateCountryMappings[key] ? key : null;
+  }
+
+  /**
+   * Generate a country or state value from the org's own decoded picklist
+   * dependency mapping (session.stateCountryMappings, built from validFor
+   * bitmaps during field analysis). This is the org's source of truth — values
+   * are guaranteed to match its AddressSettings integration codes, which the
+   * hardcoded WESTERN_COUNTRIES_DATA cannot promise.
+   *
+   * Return contract: `undefined` = no org mapping for this field, caller should
+   * use its legacy path; `null` = definitively omit the field (e.g. state with
+   * no country yet, or a country with no states in this org).
+   */
+  static generateFromOrgMapping(field, fieldName, objectName, index, recordContext, options, kind) {
+    // Only *Code fields participate — text twins are derived by Salesforce
+    if (!/Code$/i.test(fieldName)) return undefined;
+
+    const mappings = options?.stateCountryMappings;
+    if (!mappings) return undefined;
+    const key = this.findMappingKey(objectName, fieldName, mappings);
+    if (!key) return undefined;
+
+    const decoded = mappings[key]?.mapping; // { mapping: {country: [states]}, countries }
+    if (!decoded?.mapping || !Array.isArray(decoded.countries) || decoded.countries.length === 0) {
+      return undefined;
+    }
+
+    const prefix = this.extractAddressPrefix(fieldName);
+
+    if (kind === 'country') {
+      // Respect the user's selected countries where they intersect the org's list
+      const preferred = options?.preferences?.selectedCountries || [];
+      const pool = preferred.filter(c => decoded.countries.includes(c));
+      const source = pool.length > 0 ? pool : decoded.countries;
+      const country = source[index % source.length];
+      if (!recordContext.selectedCountries) recordContext.selectedCountries = {};
+      recordContext.selectedCountries[prefix] = country;
+      return country;
+    }
+
+    // kind === 'state'
+    const country = recordContext.selectedCountries?.[prefix];
+    if (!country) return null; // never emit a state without its country
+    const states = decoded.mapping[country] || [];
+    if (states.length === 0) return null; // org defines no states for this country
+    return states[index % states.length];
   }
   
   /**
@@ -900,6 +946,41 @@ class FieldDataGenerator {
     return faker.internet.url();
   }
   
+  /**
+   * Clamp a numeric value to the field's precision/scale so it cannot trigger
+   * NUMBER_OUTSIDE_VALID_RANGE. Salesforce numbers allow at most
+   * (precision - scale) whole digits; int fields report `digits` instead.
+   */
+  static clampToFieldPrecision(value, field) {
+    if (typeof value !== 'number' || !isFinite(value)) return value;
+
+    const scale = typeof field.scale === 'number' && field.scale >= 0 ? field.scale : null;
+    const precision = typeof field.precision === 'number' && field.precision > 0 ? field.precision : null;
+    const digits = typeof field.digits === 'number' && field.digits > 0 ? field.digits : null;
+
+    let result = value;
+
+    if (precision !== null) {
+      const wholeDigits = Math.max(1, precision - (scale || 0));
+      // Max representable value, e.g. Number(4,1) -> 999.9
+      const cap = Math.pow(10, wholeDigits) - (scale ? Math.pow(10, -scale) : 1);
+      if (Math.abs(result) > cap) {
+        result = result < 0 ? -cap : cap;
+      }
+    } else if (digits !== null) {
+      const cap = Math.pow(10, digits) - 1;
+      if (Math.abs(result) > cap) {
+        result = result < 0 ? -cap : cap;
+      }
+    }
+
+    if (scale !== null) {
+      result = Number(result.toFixed(scale));
+    }
+
+    return result;
+  }
+
   /**
    * Generate integer values based on context
    */
@@ -1031,36 +1112,56 @@ class FieldDataGenerator {
    */
   static generatePicklist(field, index, objectName = '', options = {}, recordContext = {}) {
     const fieldName = field.name;
-    
-    // Handle State/Country picklist fields with org-specific or Western Countries dictionary
+    let value;
+    let isAddressField = false;
+
+    // Handle State/Country picklist fields. The org's own decoded picklist
+    // dependency mapping wins; the preference/Western-dictionary paths are
+    // fallbacks for orgs without State & Country Picklists metadata.
     if (FIELD_CONTEXT_PATTERNS.COUNTRY.test(fieldName) || fieldName.toLowerCase().includes('countrycode')) {
-      console.log(`🌍 PICKLIST Country field detected: ${fieldName} for ${objectName}`);
-      // Use org-specific or simple Western countries generation for country picklist fields
-      const preferences = options.preferences;
-      if (preferences && preferences.useOrgPicklists) {
-        return this.generateOrgSpecificCountry(field, fieldName, objectName, index, recordContext, preferences);
+      isAddressField = true;
+      const orgPick = this.generateFromOrgMapping(field, fieldName, objectName, index, recordContext, options, 'country');
+      if (orgPick !== undefined) {
+        console.log(`🌍 Org picklist country for ${objectName}.${fieldName}: ${orgPick}`);
+        value = orgPick;
       } else {
-        return this.generateSimpleCountry(field, fieldName, objectName, index, recordContext);
+        const preferences = options.preferences;
+        value = (preferences && preferences.useOrgPicklists)
+          ? this.generateOrgSpecificCountry(field, fieldName, objectName, index, recordContext, preferences)
+          : this.generateSimpleCountry(field, fieldName, objectName, index, recordContext);
       }
     } else if (this.isStateField(fieldName)) {
-      console.log(`🏛️ PICKLIST State field detected: ${fieldName} for ${objectName}`);
-      // Use org-specific or simple Western countries state generation for state picklist fields
-      const preferences = options.preferences;
-      if (preferences && preferences.useOrgPicklists) {
-        return this.generateOrgSpecificState(field, fieldName, objectName, index, recordContext, preferences);
+      isAddressField = true;
+      const orgPick = this.generateFromOrgMapping(field, fieldName, objectName, index, recordContext, options, 'state');
+      if (orgPick !== undefined) {
+        console.log(`🏛️ Org picklist state for ${objectName}.${fieldName}: ${orgPick}`);
+        value = orgPick;
       } else {
-        return this.generateSimpleState(field, fieldName, objectName, index, recordContext);
+        const preferences = options.preferences;
+        value = (preferences && preferences.useOrgPicklists)
+          ? this.generateOrgSpecificState(field, fieldName, objectName, index, recordContext, preferences)
+          : this.generateSimpleState(field, fieldName, objectName, index, recordContext);
       }
-    }
-    
-    // Standard picklist generation for non-address fields
-    if (field.picklistValues && field.picklistValues.length > 0) {
+    } else if (field.picklistValues && field.picklistValues.length > 0) {
+      // Standard picklist generation for non-address fields
       const activeValues = field.picklistValues.filter(pv => pv.active);
-      if (activeValues.length > 0) {
-        return activeValues[index % activeValues.length].value;
+      value = activeValues.length > 0 ? activeValues[index % activeValues.length].value : null;
+    } else {
+      value = null;
+    }
+
+    // Restricted picklists reject anything outside their active value set.
+    // For address fields we omit rather than substitute — a swapped-in state
+    // would break the country/state pairing.
+    if (value != null && field.restrictedPicklist && Array.isArray(field.picklistValues)) {
+      const actives = field.picklistValues.filter(pv => pv.active).map(pv => pv.value);
+      if (!actives.includes(value)) {
+        console.log(`⚠️ ${objectName}.${fieldName}: "${value}" not in restricted picklist, ${isAddressField ? 'omitting' : 'substituting'}`);
+        value = isAddressField ? null : (actives.length > 0 ? actives[index % actives.length] : null);
       }
     }
-    return null;
+
+    return value;
   }
   
   /**
@@ -1120,6 +1221,14 @@ class AIPlanGenerator {
 
     // Skip categories that are handled by existing logic
     if (category === 'skip' || category === 'picklist') {
+      return FieldDataGenerator.generateValue(field, index, objectName, options, recordContext);
+    }
+
+    // Address code fields must go through the metadata-driven state/country
+    // logic regardless of how the AI classified them — the library's generic
+    // address generators can't honor the org's country→state dependency and
+    // produced states without countries (FIELD_INTEGRITY_EXCEPTION).
+    if (/^(Billing|Shipping|Mailing|Other)?(State|Country)Code$/i.test(field.name)) {
       return FieldDataGenerator.generateValue(field, index, objectName, options, recordContext);
     }
 
