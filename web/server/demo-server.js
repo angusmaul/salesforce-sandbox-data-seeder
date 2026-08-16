@@ -30,7 +30,7 @@ const CLIENT_ORIGINS = (process.env.CLIENT_URL || 'http://localhost:3000')
 // Writable state locations — override for containerized deployments (volume mounts).
 // Defaults preserve the historical locations: web/ for state files, repo-root logs/.
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..');
-const LOGS_DIR = process.env.LOGS_DIR || LOGS_DIR;
+const LOGS_DIR = process.env.LOGS_DIR || path.join(__dirname, '../../logs');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(LOGS_DIR, { recursive: true });
 
