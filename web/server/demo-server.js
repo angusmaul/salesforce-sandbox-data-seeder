@@ -2,7 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const session = require('express-session');
+const compression = require('compression');
+const rateLimit = require('express-rate-limit');
 const { createServer } = require('http');
 const { Server: SocketIOServer } = require('socket.io');
 const { v4: uuidv4 } = require('uuid');
@@ -18,28 +19,42 @@ const path = require('path');
 // Use native fetch in Node.js 18+ or polyfill for older versions
 const fetch = globalThis.fetch || require('node-fetch');
 
+const PORT = process.env.PORT || 3001;
+// Public base URL of this API server (used for OAuth callback redirect URIs)
+const SERVER_URL = process.env.SERVER_URL || `http://localhost:${PORT}`;
+// Allowed browser origins for CORS; comma-separated for multiple (e.g. LAN IP + domain)
+const CLIENT_ORIGINS = (process.env.CLIENT_URL || 'http://localhost:3000')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+// Writable state locations — override for containerized deployments (volume mounts).
+// Defaults preserve the historical locations: web/ for state files, repo-root logs/.
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..');
+const LOGS_DIR = process.env.LOGS_DIR || path.join(__dirname, '../../logs');
+fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(LOGS_DIR, { recursive: true });
+
 const app = express();
 const server = createServer(app);
 const io = new SocketIOServer(server, {
   cors: {
-    origin: "http://localhost:3000",
+    origin: CLIENT_ORIGINS,
     methods: ["GET", "POST"]
   }
 });
 
-const PORT = process.env.PORT || 3001;
-
 // File paths for persistent storage
-const SESSION_FILE = path.join(__dirname, '../.sessions.json');
-const OAUTH_FILE = path.join(__dirname, '../.oauth-configs.json');
+const SESSION_FILE = path.join(DATA_DIR, '.sessions.json');
+const OAUTH_FILE = path.join(DATA_DIR, '.oauth-configs.json');
 
 // Persistent session and OAuth storage
 class PersistentStorage {
   constructor(filePath, defaultData = {}) {
     this.filePath = filePath;
     this.data = this.load() || defaultData;
+    this._saveTimer = null;
   }
-  
+
   load() {
     try {
       if (fs.existsSync(this.filePath)) {
@@ -51,38 +66,59 @@ class PersistentStorage {
     }
     return null;
   }
-  
+
+  // Atomic write: a kill mid-write leaves the old file intact instead of truncated JSON
   save() {
     try {
-      fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2));
+      const tmpPath = `${this.filePath}.tmp`;
+      // 0o600: stores contain OAuth client secrets and Salesforce access tokens
+      fs.writeFileSync(tmpPath, JSON.stringify(this.data, null, 2), { mode: 0o600 });
+      fs.renameSync(tmpPath, this.filePath);
     } catch (error) {
       console.error(`Failed to save ${this.filePath}:`, error.message);
     }
   }
-  
+
+  // Coalesce bursts of updates into one disk write; flush() runs any pending write now
+  scheduleSave() {
+    if (this._saveTimer) return;
+    this._saveTimer = setTimeout(() => {
+      this._saveTimer = null;
+      this.save();
+    }, 500);
+  }
+
+  flush() {
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = null;
+    }
+    this.save();
+  }
+
   get(key) {
     return this.data[key];
   }
-  
+
   set(key, value) {
     this.data[key] = value;
-    this.save();
+    this.scheduleSave();
   }
-  
+
   has(key) {
     return key in this.data;
   }
-  
+
   delete(key) {
     delete this.data[key];
-    this.save();
+    this.scheduleSave();
   }
-  
+
   clear() {
     this.data = {};
-    this.save();
+    this.scheduleSave();
   }
-  
+
   entries() {
     return Object.entries(this.data);
   }
@@ -151,29 +187,56 @@ setInterval(() => {
 }, 6 * 60 * 60 * 1000);
 
 // Middleware
-app.use(helmet({ contentSecurityPolicy: false }));
+app.use(helmet());
+app.use(compression());
 app.use(cors({
-  origin: "http://localhost:3000",
+  origin: CLIENT_ORIGINS,
   credentials: true
 }));
 // Increase payload limit to handle large field metadata (especially picklistValues)
 app.use(express.json({ limit: '10mb' }));
-app.use(session({
-  secret: 'demo-secret',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 }
+
+// Rate limits: generous general ceiling (all browser traffic arrives via the
+// Next.js proxy and may share one source IP), strict on the credential endpoint.
+app.use('/api/', rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { xForwardedForHeader: false }
+}));
+app.use('/api/auth/client-credentials', rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { xForwardedForHeader: false },
+  message: { success: false, error: 'Too many authentication attempts, please try again later.' }
 }));
 
 // Serve log files statically
-app.use('/logs', express.static(path.join(__dirname, '../../logs')));
+app.use('/logs', express.static(LOGS_DIR));
+
+// loadSessionIds are server-generated (load_<timestamp>_<suffix>). Reject anything
+// else before it reaches a filesystem path — an encoded ../ in the id would
+// otherwise escape LOGS_DIR (e.g. to .sessions.json, which holds access tokens).
+function isSafeLoadSessionId(id) {
+  return typeof id === 'string' && /^[\w-]+$/.test(id);
+}
 
 // Download all logs for a session as a zip file
 app.get('/api/logs/download/:loadSessionId', async (req, res) => {
   const { loadSessionId } = req.params;
-  
+
+  if (!isSafeLoadSessionId(loadSessionId)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid load session id'
+    });
+  }
+
   try {
-    const logsDir = path.join(__dirname, '../../logs');
+    const logsDir = LOGS_DIR;
     
     // Check if main log file exists
     const mainLogPath = path.join(logsDir, `${loadSessionId}.json`);
@@ -948,7 +1011,7 @@ app.post('/api/auth/oauth/init', (req, res) => {
       timestamp: Date.now()
     });
     
-    const redirectUri = `http://localhost:3001/api/auth/oauth/callback`;
+    const redirectUri = `${SERVER_URL}/api/auth/oauth/callback`;
     
     // Construct Salesforce OAuth URL
     const authUrl = `${oauthBaseUrl}/services/oauth2/authorize?` +
@@ -1056,7 +1119,7 @@ async function exchangeCodeForToken(code, sessionId, loginUrl) {
     console.log(`🔐 Using environment credentials for token exchange`);
   }
   
-  const redirectUri = `http://localhost:3001/api/auth/oauth/callback`;
+  const redirectUri = `${SERVER_URL}/api/auth/oauth/callback`;
   
   if (!clientId || !clientSecret) {
     throw new Error('Missing Salesforce OAuth credentials');
@@ -1988,11 +2051,11 @@ app.get('/api/results/:sessionId', async (req, res) => {
   try {
     const sessionId = req.params.sessionId;
     const { loadSessionId } = req.query;
-    
-    if (!loadSessionId) {
+
+    if (!loadSessionId || !isSafeLoadSessionId(loadSessionId)) {
       return res.status(400).json({
         success: false,
-        error: 'Load session ID is required',
+        error: 'A valid load session ID is required',
         timestamp: new Date().toISOString()
       });
     }
@@ -2000,7 +2063,7 @@ app.get('/api/results/:sessionId', async (req, res) => {
     console.log(`📊 Fetching results data for session: ${sessionId}, loadSessionId: ${loadSessionId}`);
     
     // Read main log file
-    const mainLogPath = path.join(__dirname, '../../logs', `${loadSessionId}.json`);
+    const mainLogPath = path.join(LOGS_DIR,`${loadSessionId}.json`);
     if (!fs.existsSync(mainLogPath)) {
       return res.status(404).json({
         success: false,
@@ -2013,7 +2076,7 @@ app.get('/api/results/:sessionId', async (req, res) => {
     
     // Read per-object log files
     const objectResults = {};
-    const logsDir = path.join(__dirname, '../../logs');
+    const logsDir = LOGS_DIR;
     const logFiles = fs.readdirSync(logsDir).filter(file => 
       file.startsWith(`${loadSessionId}_`) && file.endsWith('.json')
     );
@@ -2722,7 +2785,7 @@ async function startDataGeneration(sessionId, configuration, globalSettings, fie
           
           // Write individual object log file
           try {
-            const objectLogPath = path.join(__dirname, '../../logs', `${loadSessionId}_${objectName}.json`);
+            const objectLogPath = path.join(LOGS_DIR,`${loadSessionId}_${objectName}.json`);
             const logsDir = path.dirname(objectLogPath);
             if (!fs.existsSync(logsDir)) {
               fs.mkdirSync(logsDir, { recursive: true });
@@ -2805,7 +2868,7 @@ async function startDataGeneration(sessionId, configuration, globalSettings, fie
         
         // Write individual error object log file
         try {
-          const objectLogPath = path.join(__dirname, '../../logs', `${loadSessionId}_${config.name}.json`);
+          const objectLogPath = path.join(LOGS_DIR,`${loadSessionId}_${config.name}.json`);
           const logsDir = path.dirname(objectLogPath);
           if (!fs.existsSync(logsDir)) {
             fs.mkdirSync(logsDir, { recursive: true });
@@ -2877,7 +2940,7 @@ async function startDataGeneration(sessionId, configuration, globalSettings, fie
       .map(([error, count]) => ({ error, count }));
     
     // Write log file to logs directory
-    const logPath = path.join(__dirname, '../../logs', `${loadSessionId}.json`);
+    const logPath = path.join(LOGS_DIR,`${loadSessionId}.json`);
     try {
       // Ensure logs directory exists
       const logsDir = path.dirname(logPath);
@@ -2920,7 +2983,7 @@ async function startDataGeneration(sessionId, configuration, globalSettings, fie
       loadLog.summary.totalTimeTaken = endTime.getTime() - startTime.getTime();
       loadLog.summary.successRate = 0;
       
-      const logPath = path.join(__dirname, '../../logs', `${loadSessionId}.json`);
+      const logPath = path.join(LOGS_DIR,`${loadSessionId}.json`);
       const logsDir = path.dirname(logPath);
       if (!fs.existsSync(logsDir)) {
         fs.mkdirSync(logsDir, { recursive: true });
@@ -4324,11 +4387,36 @@ app.use('/api/*', (req, res) => {
 // Start server
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Demo Server running on port ${PORT}`);
-  console.log(`📊 Environment: development`);
-  console.log(`🔗 API URL: http://localhost:${PORT}/api`);
-  console.log(`🌐 Client URL: http://localhost:3000`);
-  console.log('');
-  console.log('⚠️  DEMO MODE: Configure Salesforce OAuth in .env for full functionality');
+  console.log(`🔗 API URL: ${SERVER_URL}/api`);
+  console.log(`🌐 Allowed client origin(s): ${CLIENT_ORIGINS.join(', ')}`);
 });
+
+// Graceful shutdown: docker stop / systemctl stop send SIGTERM and force-kill
+// after a grace period, so flush state and close connections while we can.
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received, shutting down...`);
+
+  // Open keep-alive/WebSocket connections can stall close callbacks; don't
+  // outlive the orchestrator's grace period (Docker default: 10s).
+  const forceTimer = setTimeout(() => {
+    console.error('Forced shutdown after 8s');
+    process.exit(1);
+  }, 8000);
+  forceTimer.unref();
+
+  sessions.flush();
+  oauthConfigs.flush();
+
+  // io.close() also closes the underlying HTTP server
+  io.close(() => {
+    console.log('Shutdown complete');
+    process.exit(0);
+  });
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 module.exports = app;

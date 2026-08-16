@@ -59,7 +59,13 @@ export default function WizardPage() {
   const [assistantOpen, setAssistantOpen] = useState(false);
   
   const { session, loading, updateSession, refreshSession, sessionId: currentSessionId } = useSession(sessionId as string);
-  const socket = useWebSocket(process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001');
+  // Socket.IO connects directly to the backend (Next.js rewrites can't proxy WebSockets).
+  // Default: same host the browser is on, backend port. Override with NEXT_PUBLIC_WS_URL
+  // (baked at build time) e.g. when the backend sits behind a reverse proxy.
+  const socket = useWebSocket(
+    process.env.NEXT_PUBLIC_WS_URL ||
+    (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:3001` : '')
+  );
   
   useEffect(() => {
     if (error) {

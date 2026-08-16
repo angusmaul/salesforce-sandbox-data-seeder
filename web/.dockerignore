@@ -1,0 +1,13 @@
+node_modules
+.next
+dist
+npm-debug.log*
+.env
+.env.local
+.sessions.json
+.oauth-configs.json
+*.tmp
+Dockerfile.*
+.dockerignore
+CLAUDE.md
+**/*.test.js

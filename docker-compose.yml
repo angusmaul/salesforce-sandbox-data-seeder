@@ -1,0 +1,50 @@
+# Salesforce Sandbox Data Seeder — web app (backend + frontend).
+# Copy docker.env.example to .env and set at least SESSION_SECRET before `docker compose up`.
+#
+# Access: browse to http://<host>:3000. The frontend proxies /api and /logs to the
+# backend internally, but the Socket.IO connection goes DIRECT from the browser to
+# <host>:3001 (Next.js cannot proxy WebSockets) — so port 3001 is published, and for
+# any non-localhost host you MUST set CLIENT_URL to that host's :3000 origin (used for
+# CORS and the Socket.IO origin check).
+
+services:
+  server:
+    build:
+      context: ./web
+      dockerfile: Dockerfile.server
+    init: true            # forward SIGTERM / reap, belt-and-suspenders for graceful shutdown
+    environment:
+      PORT: 3001
+      SERVER_URL: ${SERVER_URL:-http://localhost:3001}
+      CLIENT_URL: ${CLIENT_URL:-http://localhost:3000}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      SF_CLIENT_ID: ${SF_CLIENT_ID:-}
+      SF_CLIENT_SECRET: ${SF_CLIENT_SECRET:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DATA_DIR: /data
+      LOGS_DIR: /logs
+    volumes:
+      - seed-data:/data
+      - seed-logs:/logs
+    ports:
+      - "3001:3001"       # required: browser connects here directly for Socket.IO
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile.web
+      args:
+        # Build-time: baked into the Next.js build. The compose service name is stable.
+        SERVER_INTERNAL_URL: http://server:3001
+    depends_on:
+      - server
+    ports:
+      # Host port configurable (set WEB_PORT in .env) — the container always
+      # listens on 3000. Set CLIENT_URL to match the origin you browse to.
+      - "${WEB_PORT:-3000}:3000"
+    restart: unless-stopped
+
+volumes:
+  seed-data:
+  seed-logs:

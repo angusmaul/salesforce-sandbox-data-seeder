@@ -1,5 +1,5 @@
-// Re-export types from CLI for consistency
-export * from '../../../src/models/salesforce';
+// Re-export the Salesforce domain types (vendored in ./salesforce)
+export * from './salesforce';
 
 // Additional web-specific types
 export interface WizardSession {
@@ -112,15 +112,14 @@ export interface ClaudeAction {
   data?: any;
 }
 
-// Import types from CLI
-import { 
-  SalesforceConnection, 
-  SalesforceObject, 
+// Types used by the interfaces below
+import {
+  SalesforceConnection,
+  SalesforceObject,
   SeedResult,
-  SandboxInfo 
-} from '../../../src/models/salesforce';
-
-import { GenerationPlan } from '../../../src/generators/data-generator';
+  SandboxInfo,
+  GenerationPlan
+} from './salesforce';
 
 // AI Generation Plan types
 export type CompanyProfile = 'small' | 'medium' | 'enterprise' | 'mixed';
