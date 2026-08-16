@@ -80,7 +80,9 @@ LOGS_DIR=...                # Where load logs are written and served from (auto-
                             # default <repo>/logs
 SF_CLIENT_ID=...
 SF_CLIENT_SECRET=...
-ANTHROPIC_API_KEY=...       # Optional, enables AI field classification
+ANTHROPIC_API_KEY=...       # Optional fallback for AI field classification; providers
+                            # are normally configured in the UI (.ai-config.json store):
+                            # Anthropic, OpenAI-compatible endpoints, or local Ollama
 ```
 
 The browser talks to the backend via relative `/api` and `/logs` URLs proxied through

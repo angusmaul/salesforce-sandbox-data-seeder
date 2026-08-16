@@ -20,6 +20,9 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
       SF_CLIENT_ID: ${SF_CLIENT_ID:-}
       SF_CLIENT_SECRET: ${SF_CLIENT_SECRET:-}
+      # Optional fallback: AI providers are normally configured in the UI
+      # (Anthropic / OpenAI-compatible / Ollama). To use an Ollama instance on
+      # the Docker host, set its Base URL to http://host.docker.internal:11434.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       DATA_DIR: /data
       LOGS_DIR: /logs

@@ -13,6 +13,11 @@ const nextConfig = {
   swcMinify: true,
   // Emit a self-contained server bundle (.next/standalone) for a small Docker image.
   output: 'standalone',
+  experimental: {
+    // The rewrite proxy kills connections after 30s by default. AI field
+    // analysis through a local Ollama model can legitimately take minutes.
+    proxyTimeout: 600_000
+  },
   async rewrites() {
     return [
       {

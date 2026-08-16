@@ -138,6 +138,16 @@ import {
   GenerationPlan
 } from './salesforce';
 
+// AI provider configuration (masked — the API key never reaches the client)
+export interface AIConfigStatus {
+  configured: boolean;
+  provider: 'anthropic' | 'openai-compatible' | 'ollama' | null;
+  model: string | null;
+  baseUrl: string | null;
+  apiKeySet: boolean;
+  source: 'ui' | 'env' | null;
+}
+
 // AI Generation Plan types
 export type CompanyProfile = 'small' | 'medium' | 'enterprise' | 'mixed';
 

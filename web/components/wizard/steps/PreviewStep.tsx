@@ -19,8 +19,9 @@ import {
 } from '@heroicons/react/24/outline';
 import {
   WizardSession, WizardStep, AIGenerationPlan,
-  CompanyProfile, CategoryOption
+  CompanyProfile, CategoryOption, AIConfigStatus
 } from '../../../shared/types/api';
+import AISettingsPanel from '../../ai/AISettingsPanel';
 import { Socket } from 'socket.io-client';
 
 interface PreviewStepProps {
@@ -61,12 +62,27 @@ export default function PreviewStep({
   const [sampleRecords, setSampleRecords] = useState<Record<string, any[]>>({});
   const [loadingSamples, setLoadingSamples] = useState<Set<string>>(new Set());
   const [editingField, setEditingField] = useState<{ object: string; field: string } | null>(null);
+  const [aiConfig, setAiConfig] = useState<AIConfigStatus | null>(null);
+  const [showAISettings, setShowAISettings] = useState(false);
 
   // Load categories list for override dropdowns
   useEffect(() => {
     fetch(`/api/ai/categories`)
       .then(r => r.json())
       .then(res => { if (res.success) setCategories(res.data); })
+      .catch(() => {});
+  }, []);
+
+  // Load AI provider availability (drives the banner + settings panel)
+  useEffect(() => {
+    fetch(`/api/ai/config`)
+      .then(r => r.json())
+      .then(res => {
+        if (res.success) {
+          setAiConfig(res.data);
+          if (!res.data.configured) setShowAISettings(true);
+        }
+      })
       .catch(() => {});
   }, []);
 
@@ -164,24 +180,58 @@ export default function PreviewStep({
 
   // --- AI Analysis ---
 
+  // If the analyze request dies mid-flight (slow local models can outlive
+  // proxy/network timeouts) the server keeps working and caches the plan —
+  // poll for it instead of giving up.
+  const pollForPlan = useCallback(async (): Promise<AIGenerationPlan | null> => {
+    for (let attempt = 0; attempt < 40; attempt++) { // ~10 minutes
+      await new Promise(resolve => setTimeout(resolve, 15000));
+      try {
+        const res = await fetch(`/api/ai/generation-plan/${session.id}`);
+        const data = await res.json();
+        if (data.success && data.data) return data.data;
+      } catch {
+        // keep polling
+      }
+    }
+    return null;
+  }, [session.id]);
+
   const handleAnalyzeFields = useCallback(async () => {
     if (!session.id) return;
     setIsAnalyzing(true);
     try {
-      const res = await fetch(`/api/ai/analyze-fields/${session.id}`, { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        setAiPlan(data.data);
-        toast.success(`AI analyzed ${data.objectCount} objects`);
-      } else {
-        toast.error(data.error || 'AI analysis failed');
+      let plan: AIGenerationPlan | null = null;
+      let objectCount: number | null = null;
+      try {
+        const res = await fetch(`/api/ai/analyze-fields/${session.id}`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          plan = data.data;
+          objectCount = data.objectCount;
+        } else if (res.status >= 500) {
+          // Proxy/server-level failure while the analysis may still be running
+          throw new Error(data.error || 'Connection interrupted');
+        } else {
+          toast.error(data.error || 'AI analysis failed');
+          return;
+        }
+      } catch {
+        toast('Connection dropped — the analysis is still running, waiting for the result…', { icon: '⏳' });
+        plan = await pollForPlan();
+        if (!plan) {
+          toast.error('AI analysis did not complete. Check the server logs.');
+          return;
+        }
       }
-    } catch (err: any) {
-      toast.error(`AI analysis error: ${err.message}`);
+      if (plan) {
+        setAiPlan(plan);
+        toast.success(`AI analyzed ${objectCount ?? Object.keys(plan).length} objects`);
+      }
     } finally {
       setIsAnalyzing(false);
     }
-  }, [session.id]);
+  }, [session.id, pollForPlan]);
 
   // --- Load sample records for an object ---
 
@@ -381,8 +431,15 @@ export default function PreviewStep({
               </select>
             )}
             <button
+              onClick={() => setShowAISettings(s => !s)}
+              className="text-sm text-indigo-700 hover:text-indigo-900 font-medium"
+            >
+              {showAISettings ? 'Hide settings' : 'AI settings'}
+            </button>
+            <button
               onClick={handleAnalyzeFields}
-              disabled={isAnalyzing}
+              disabled={isAnalyzing || !aiConfig?.configured}
+              title={!aiConfig?.configured ? 'Configure an AI provider first' : undefined}
               className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isAnalyzing ? (
@@ -407,12 +464,19 @@ export default function PreviewStep({
         <p className="text-sm text-indigo-700">
           {aiPlan
             ? `AI has classified fields across ${Object.keys(aiPlan).length} objects. Expand objects below to see mappings, override categories, and preview realistic sample data.`
-            : 'Use AI to analyze your field schemas and generate more realistic, correlated test data. This sends field metadata (not your data) to Claude for classification.'}
+            : aiConfig?.configured
+              ? `Use AI to analyze your field schemas and generate more realistic, correlated test data. Field metadata (not your data) is sent to ${aiConfig.provider === 'ollama' ? `your local Ollama model (${aiConfig.model})` : `${aiConfig.provider === 'anthropic' ? 'Anthropic' : 'your configured endpoint'} (${aiConfig.model})`} for classification.`
+              : 'No AI provider is configured. Set one up below — Anthropic, any OpenAI-compatible endpoint, or a local Ollama model. Without AI, generation still works using pattern-based rules.'}
         </p>
         {aiPlan && companyProfile && (
           <p className="text-xs text-indigo-500 mt-1">
             Record profile: <strong>{PROFILE_OPTIONS.find(p => p.value === companyProfile)?.label}</strong> — {PROFILE_OPTIONS.find(p => p.value === companyProfile)?.description}
           </p>
+        )}
+        {showAISettings && (
+          <div className="mt-4">
+            <AISettingsPanel onConfigChange={setAiConfig} />
+          </div>
         )}
       </div>
 
