@@ -1,0 +1,37 @@
+{
+  "name": "salesforce-sandbox-data-seeder-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "API backend for the Salesforce Sandbox Data Seeder web app (demo-server.js)",
+  "main": "demo-server.js",
+  "scripts": {
+    "start": "node demo-server.js"
+  },
+  "//": "Runtime-only manifest for the backend Docker image. Dev still runs from the umbrella web/ install (web/package.json lists these too). Keep versions in sync with web/package.json.",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.27.0",
+    "@faker-js/faker": "^8.4.1",
+    "archiver": "^7.0.1",
+    "compression": "^1.7.4",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.22.0",
+    "express-rate-limit": "^7.1.5",
+    "helmet": "^7.1.0",
+    "jsforce": "3.10.14",
+    "node-fetch": "^3.3.2",
+    "socket.io": "^4.7.4",
+    "uuid": "^9.0.1"
+  },
+  "overrides": {
+    "body-parser": {
+      "qs": "6.14.2"
+    },
+    "archiver-utils": {
+      "glob": "10.5.0"
+    }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

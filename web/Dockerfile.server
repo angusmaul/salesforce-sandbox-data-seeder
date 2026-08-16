@@ -1,11 +1,12 @@
 # Express backend (server/demo-server.js) — plain JS, no build step.
-# Build context: the web/ directory.
+# Build context: the web/ directory. Uses server/package.json, a runtime-only
+# manifest with just the backend's ~13 deps (not the frontend's next/react/etc).
 
 # ---- deps ----
 FROM node:20-alpine AS deps
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+COPY server/package.json server/package-lock.json ./
+RUN npm ci
 
 # ---- runtime ----
 FROM node:20-alpine AS runtime
@@ -20,7 +21,6 @@ RUN addgroup -S app && adduser -S app -G app \
     && mkdir -p /data /logs && chown -R app:app /data /logs
 
 COPY --from=deps /app/node_modules ./node_modules
-COPY package.json ./
 COPY server ./server
 
 USER app

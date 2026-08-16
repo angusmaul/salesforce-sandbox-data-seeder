@@ -32,16 +32,17 @@ services:
 
   web:
     build:
-      # Repo-root context: the frontend re-exports types from ../../../src (the CLI).
-      context: .
-      dockerfile: web/Dockerfile.web
+      context: ./web
+      dockerfile: Dockerfile.web
       args:
         # Build-time: baked into the Next.js build. The compose service name is stable.
         SERVER_INTERNAL_URL: http://server:3001
     depends_on:
       - server
     ports:
-      - "3000:3000"
+      # Host port configurable (set WEB_PORT in .env) — the container always
+      # listens on 3000. Set CLIENT_URL to match the origin you browse to.
+      - "${WEB_PORT:-3000}:3000"
     restart: unless-stopped
 
 volumes:
