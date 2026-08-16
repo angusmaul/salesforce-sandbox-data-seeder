@@ -55,7 +55,7 @@ npm run dev              # Run CLI via ts-node
 # Web
 cd web
 npm install
-cp .env.example .env     # Configure environment variables
+cp env.example .env      # Configure environment variables (all optional for local dev)
 npm run dev              # Starts both server (3001) and client (3000)
 ```
 
