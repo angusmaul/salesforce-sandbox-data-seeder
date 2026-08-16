@@ -104,12 +104,35 @@ describe('insertWithRetry', () => {
     expect(resultsArray[0].retryHistory[0].action).toContain('transient');
   });
 
-  test('unremediable code fails terminally with original errors', async () => {
+  test('validation exception without constraints fails terminally', async () => {
     const insertFn = async (recs) => recs.map(() => fail('FIELD_CUSTOM_VALIDATION_EXCEPTION', [], 'Amount must be < 500'));
     const { resultsArray, retrySummary } = await insertWithRetry(insertFn, 'Opportunity', [{ Name: 'A' }], ctx());
     expect(resultsArray[0].success).toBe(false);
     expect(resultsArray[0].errors[0].statusCode).toBe('FIELD_CUSTOM_VALIDATION_EXCEPTION');
     expect(retrySummary.attempts).toBe(1);
+  });
+
+  test('validation exception WITH interpreted constraints recovers (the "Active must be Yes" case)', async () => {
+    let call = 0;
+    const insertFn = async (recs) => {
+      call++;
+      if (call === 1) return recs.map(() => fail('FIELD_CUSTOM_VALIDATION_EXCEPTION', [], 'Active is required to be Yes'));
+      return recs.map((r, i) => (r.Active__c === 'Yes' ? ok(`id${i}`) : fail('FIELD_CUSTOM_VALIDATION_EXCEPTION', [], 'Active is required to be Yes')));
+    };
+    const withConstraints = { ...ctx(), validationConstraints: { Active__c: { type: 'fixedValue', value: 'Yes' } } };
+    const { resultsArray, retrySummary } = await insertWithRetry(insertFn, 'Account', [{ Name: 'Acme', Active__c: 'No' }], withConstraints);
+    expect(resultsArray[0].success).toBe(true);
+    expect(resultsArray[0].attempts).toBe(2);
+    expect(resultsArray[0].retryHistory[0].action).toContain('applied validation constraints');
+    expect(retrySummary.recoveredRecords).toBe(1);
+  });
+
+  test('validation exception with already-satisfied constraints stays terminal', async () => {
+    const insertFn = async (recs) => recs.map(() => fail('FIELD_CUSTOM_VALIDATION_EXCEPTION', [], 'some other rule'));
+    const withConstraints = { ...ctx(), validationConstraints: { Active__c: { type: 'fixedValue', value: 'Yes' } } };
+    const { resultsArray } = await insertWithRetry(insertFn, 'Account', [{ Name: 'Acme', Active__c: 'Yes' }], withConstraints);
+    expect(resultsArray[0].success).toBe(false);
+    expect(resultsArray[0].attempts).toBe(1);
   });
 
   test('exhausts MAX_ATTEMPTS then fails with history', async () => {

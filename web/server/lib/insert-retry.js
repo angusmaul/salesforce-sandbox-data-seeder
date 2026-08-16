@@ -13,6 +13,7 @@
  */
 
 const { FieldDataGenerator } = require('./salesforce-field-types');
+const { applyConstraints } = require('./field-constraints');
 
 const MAX_ATTEMPTS = 3; // 1 initial + 2 remediated passes
 
@@ -159,9 +160,20 @@ function remediateRecord(objectName, record, errors, ctx, attempt) {
         break;
       }
 
-      // Needs understanding of the rule formula — upgraded in Increment 3
-      case 'FIELD_CUSTOM_VALIDATION_EXCEPTION':
-        return null;
+      // With interpreted rule constraints (ctx.validationConstraints) we can
+      // adjust the record to satisfy the rule; without them it's terminal.
+      case 'FIELD_CUSTOM_VALIDATION_EXCEPTION': {
+        const constraints = ctx.validationConstraints;
+        if (!constraints || Object.keys(constraints).length === 0) return null;
+        const applied = applyConstraints(adjusted, constraints, {
+          fieldsByName: ctx.fieldsByName,
+          regenerateField: ctx.regenerateField ? (meta) => ctx.regenerateField(meta, attempt) : undefined,
+          index: attempt
+        });
+        if (!applied.length) return null; // constraints already satisfied → rule not expressible, give up
+        notes.push(`applied validation constraints (${applied.join('; ')})`);
+        break;
+      }
 
       default:
         return null;

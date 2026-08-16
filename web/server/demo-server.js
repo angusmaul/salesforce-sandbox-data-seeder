@@ -14,6 +14,8 @@ const aiProviders = require('./services/ai-providers');
 const { buildCorrelatedContext, generateFromLibrary, listAvailableGenerators } = require('./lib/field-data-library');
 const { getCachedMapping, getRandomStateForCountry } = require('./lib/picklist-decoder');
 const { insertWithRetry } = require('./lib/insert-retry');
+const { applyConstraints } = require('./lib/field-constraints');
+const { interpretValidationRules } = require('./services/validation-interpreter');
 const archiver = require('archiver');
 const jsforce = require('jsforce');
 const fs = require('fs');
@@ -2637,6 +2639,44 @@ app.post('/api/execution/start/:sessionId', async (req, res) => {
 let standardPricebookId = null;
 
 // Manual validation rule restoration endpoint
+// Read-only: list active validation rules for the session's selected objects,
+// plus any AI-derived field constraints already cached on the session
+app.get('/api/validation-rules/list/:sessionId', async (req, res) => {
+  try {
+    const session = sessions.get(req.params.sessionId);
+    if (!session) {
+      return res.status(404).json({ success: false, error: 'Session not found', timestamp: new Date().toISOString() });
+    }
+    if (!session.connectionInfo?.accessToken) {
+      return res.status(400).json({ success: false, error: 'Session is not connected to Salesforce', timestamp: new Date().toISOString() });
+    }
+    const objects = req.query.objects
+      ? String(req.query.objects).split(',').map(s => s.trim()).filter(Boolean)
+      : (session.selectedObjects || Object.keys(session.fieldAnalysis || {}));
+
+    const conn = new jsforce.Connection({
+      instanceUrl: session.connectionInfo.instanceUrl,
+      accessToken: session.connectionInfo.accessToken,
+      version: session.connectionInfo.apiVersion || '59.0'
+    });
+    const rules = await fetchValidationRules(conn, objects);
+
+    const fresh = sessions.get(req.params.sessionId);
+    if (fresh) {
+      fresh.validationRules = rules;
+      sessions.set(req.params.sessionId, fresh);
+    }
+
+    res.json({
+      success: true,
+      data: { rules, constraints: session.validationConstraints || null },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message, timestamp: new Date().toISOString() });
+  }
+});
+
 app.post('/api/validation-rules/restore/:sessionId', async (req, res) => {
   try {
     const sessionId = req.params.sessionId;
@@ -2942,6 +2982,50 @@ async function startDataGeneration(sessionId, configuration, globalSettings, fie
         console.warn(`⚠️ Failed to disable validation rules: ${error.message}`);
         io.to(sessionId).emit('execution-log', `WARNING: Could not disable validation rules: ${error.message}`);
       }
+    } else {
+      // Understand-the-rules path: read active validation rules and, when an AI
+      // provider is configured, interpret them into generation constraints so
+      // records satisfy the rules instead of tripping them.
+      try {
+        const rules = await fetchValidationRules(conn, objectNames);
+        if (rules.length > 0) {
+          io.to(sessionId).emit('execution-log', `Found ${rules.length} active validation rule(s) on selected objects`);
+          const providerConfig = getAIProviderConfig();
+          if (providerConfig) {
+            io.to(sessionId).emit('execution-log', `Interpreting validation rules with AI...`);
+            const constraints = await interpretValidationRules(providerConfig, rules, fieldAnalysis);
+            const freshSession = sessions.get(sessionId);
+            if (freshSession) {
+              freshSession.validationRules = rules;
+              freshSession.validationConstraints = constraints || null;
+              sessions.set(sessionId, freshSession);
+            }
+            if (constraints) {
+              const constrained = Object.entries(constraints)
+                .filter(([, c]) => Object.keys(c.fieldConstraints || {}).length > 0);
+              const unsupported = Object.values(constraints).flatMap(c => c.unsupported || []);
+              if (constrained.length > 0) {
+                for (const [objName, c] of constrained) {
+                  io.to(sessionId).emit('execution-log',
+                    `✅ ${objName}: derived constraints for ${Object.keys(c.fieldConstraints).join(', ')}`);
+                }
+              }
+              if (unsupported.length > 0) {
+                io.to(sessionId).emit('execution-log',
+                  `⚠️ ${unsupported.length} rule(s) could not be auto-satisfied (${unsupported.join(', ')}) — consider the "skip validation rules" option if records fail`);
+              }
+            } else {
+              io.to(sessionId).emit('execution-log', `⚠️ AI could not interpret the validation rules — proceeding without constraints`);
+            }
+          } else {
+            io.to(sessionId).emit('execution-log',
+              `⚠️ No AI provider configured — validation rules will not be auto-satisfied (configure AI in the Preview step, or use "skip validation rules")`);
+          }
+        }
+      } catch (error) {
+        console.warn(`⚠️ Validation-rule interpretation failed: ${error.message}`);
+        io.to(sessionId).emit('execution-log', `WARNING: Validation-rule interpretation failed: ${error.message}`);
+      }
     }
     
     // Query Standard Pricebook ID if we're loading PricebookEntry records
@@ -3052,6 +3136,7 @@ async function startDataGeneration(sessionId, configuration, globalSettings, fie
                 fieldsByName: new Map(objectFields.map(f => [f.name, f])),
                 regenerateField: (meta, attempt) =>
                   generateFieldValueWithContext(meta, attempt, objectName, sessionId, { recordIndex: attempt }),
+                validationConstraints: sessions.get(sessionId)?.validationConstraints?.[objectName]?.fieldConstraints || null,
                 onLog: (msg) => io.to(sessionId).emit('execution-log', msg)
               }
             );
@@ -3658,7 +3743,14 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
   }
   
   console.log(`📝 Found ${writableFields.length} writable fields, ${requiredFields.length} required fields for ${objectName}`);
-  
+
+  // Constraints derived from validation-rule interpretation (Increment 3)
+  const objectConstraints = sessions.get(sessionId)?.validationConstraints?.[objectName]?.fieldConstraints || null;
+  const writableFieldsByName = new Map(writableFields.map(f => [f.name, f]));
+  if (objectConstraints && Object.keys(objectConstraints).length > 0) {
+    console.log(`📐 Applying validation-rule constraints for ${objectName}: ${Object.keys(objectConstraints).join(', ')}`);
+  }
+
   for (let i = 0; i < recordCount; i++) {
     const record = {};
     
@@ -3790,7 +3882,16 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
         }
       }
     });
-    
+
+    // Enforce validation-rule constraints so records satisfy the org's rules
+    if (objectConstraints) {
+      applyConstraints(record, objectConstraints, {
+        fieldsByName: writableFieldsByName,
+        regenerateField: (meta, idx) => generateFieldValueWithContext(meta, idx, objectName, sessionId, recordContext),
+        index: i
+      });
+    }
+
     records.push(record);
   }
   
@@ -3976,6 +4077,46 @@ const standardValueSetCache = new Map();
  * @param {Object} session - Session object to store disabled rules
  * @returns {Array} List of disabled validation rules
  */
+/**
+ * Read-only collector: fetch active validation rules (with formulas and error
+ * messages) for the given objects. Unlike disableValidationRules, this never
+ * mutates org metadata.
+ */
+async function fetchValidationRules(conn, objectNames) {
+  const collected = [];
+  try {
+    conn.timeout = 120000;
+    const listed = await conn.metadata.list([{ type: 'ValidationRule' }]);
+    const listedArray = Array.isArray(listed) ? listed : (listed ? [listed] : []);
+    const wanted = listedArray.filter(item => {
+      const objectName = String(item.fullName || '').split('.')[0];
+      return objectNames.includes(objectName);
+    });
+
+    for (const item of wanted) {
+      try {
+        const rule = await conn.metadata.read('ValidationRule', item.fullName);
+        if (rule && (rule.active === true || rule.active === 'true')) {
+          const [objectName, ruleName] = String(item.fullName).split('.');
+          collected.push({
+            fullName: item.fullName,
+            objectName,
+            ruleName,
+            errorConditionFormula: rule.errorConditionFormula || '',
+            errorMessage: rule.errorMessage || '',
+            description: rule.description || ''
+          });
+        }
+      } catch (readError) {
+        console.warn(`⚠️ Could not read validation rule ${item.fullName}:`, readError.message);
+      }
+    }
+  } catch (error) {
+    console.warn('⚠️ Could not list validation rules:', error.message);
+  }
+  return collected;
+}
+
 async function disableValidationRules(conn, objectNames, session) {
   console.log(`🔧 Starting to disable validation rules for objects: ${objectNames.join(', ')}`);
   const disabledRules = [];
