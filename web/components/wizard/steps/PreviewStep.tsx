@@ -180,24 +180,58 @@ export default function PreviewStep({
 
   // --- AI Analysis ---
 
+  // If the analyze request dies mid-flight (slow local models can outlive
+  // proxy/network timeouts) the server keeps working and caches the plan —
+  // poll for it instead of giving up.
+  const pollForPlan = useCallback(async (): Promise<AIGenerationPlan | null> => {
+    for (let attempt = 0; attempt < 40; attempt++) { // ~10 minutes
+      await new Promise(resolve => setTimeout(resolve, 15000));
+      try {
+        const res = await fetch(`/api/ai/generation-plan/${session.id}`);
+        const data = await res.json();
+        if (data.success && data.data) return data.data;
+      } catch {
+        // keep polling
+      }
+    }
+    return null;
+  }, [session.id]);
+
   const handleAnalyzeFields = useCallback(async () => {
     if (!session.id) return;
     setIsAnalyzing(true);
     try {
-      const res = await fetch(`/api/ai/analyze-fields/${session.id}`, { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        setAiPlan(data.data);
-        toast.success(`AI analyzed ${data.objectCount} objects`);
-      } else {
-        toast.error(data.error || 'AI analysis failed');
+      let plan: AIGenerationPlan | null = null;
+      let objectCount: number | null = null;
+      try {
+        const res = await fetch(`/api/ai/analyze-fields/${session.id}`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          plan = data.data;
+          objectCount = data.objectCount;
+        } else if (res.status >= 500) {
+          // Proxy/server-level failure while the analysis may still be running
+          throw new Error(data.error || 'Connection interrupted');
+        } else {
+          toast.error(data.error || 'AI analysis failed');
+          return;
+        }
+      } catch {
+        toast('Connection dropped — the analysis is still running, waiting for the result…', { icon: '⏳' });
+        plan = await pollForPlan();
+        if (!plan) {
+          toast.error('AI analysis did not complete. Check the server logs.');
+          return;
+        }
       }
-    } catch (err: any) {
-      toast.error(`AI analysis error: ${err.message}`);
+      if (plan) {
+        setAiPlan(plan);
+        toast.success(`AI analyzed ${objectCount ?? Object.keys(plan).length} objects`);
+      }
     } finally {
       setIsAnalyzing(false);
     }
-  }, [session.id]);
+  }, [session.id, pollForPlan]);
 
   // --- Load sample records for an object ---
 

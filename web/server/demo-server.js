@@ -780,9 +780,12 @@ app.post('/api/ai/analyze-fields/:sessionId', async (req, res) => {
       return res.json({ success: false, error: 'AI analysis returned no results', timestamp: new Date().toISOString() });
     }
 
-    // Cache plan in session
-    sessionData.aiGenerationPlan = plan;
-    sessions.set(sessionId, sessionData);
+    // Cache plan in session. Re-fetch the session first: the analysis can run
+    // for minutes, and writing back the object we captured before the await
+    // would clobber any updates other requests made in the meantime.
+    const freshSession = sessions.get(sessionId) || sessionData;
+    freshSession.aiGenerationPlan = plan;
+    sessions.set(sessionId, freshSession);
     // sessions.set() auto-saves via PersistentStorage
 
     io.to(sessionId).emit('progress', { message: 'AI field analysis complete', progress: 100 });
@@ -945,12 +948,16 @@ app.put('/api/sessions/:sessionId', (req, res) => {
     });
   }
   
-  const updatedSession = { ...session, ...req.body, updatedAt: new Date() };
-  sessions.set(req.params.sessionId, updatedSession);
-  
+  // Mutate in place rather than replacing the object: long-running endpoints
+  // (field analysis, AI classification) hold a reference to the session across
+  // multi-minute awaits, and swapping the object out from under them turns
+  // their eventual write-back into a lost-update clobber.
+  Object.assign(session, req.body, { updatedAt: new Date() });
+  sessions.set(req.params.sessionId, session);
+
   res.json({
     success: true,
-    data: updatedSession,
+    data: session,
     timestamp: new Date().toISOString()
   });
 });
@@ -1607,14 +1614,15 @@ app.post('/api/discovery/analyze-fields/:sessionId', async (req, res) => {
       }
     }
     
-    // Save field analysis results to session
-    session.fieldAnalysis = analyzedObjects;
-    
-    // Process state-country picklist mappings for smart address generation
-    session.stateCountryMappings = await processStateCountryMappings(analyzedObjects, sessionId);
-    
-    session.updatedAt = new Date();
-    sessions.set(sessionId, session);
+    // Save field analysis results to session. Re-fetch first: the describe loop
+    // above runs for minutes, and writing back the ref captured at request
+    // start would clobber concurrent session updates (lost-update race).
+    const stateCountryMappings = await processStateCountryMappings(analyzedObjects, sessionId);
+    const freshSession = sessions.get(sessionId) || session;
+    freshSession.fieldAnalysis = analyzedObjects;
+    freshSession.stateCountryMappings = stateCountryMappings;
+    freshSession.updatedAt = new Date();
+    sessions.set(sessionId, freshSession);
     
     console.log(`✅ Field analysis completed for ${processedCount} objects`);
     
