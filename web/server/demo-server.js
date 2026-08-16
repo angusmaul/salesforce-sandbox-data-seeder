@@ -2,7 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const session = require('express-session');
+const compression = require('compression');
+const rateLimit = require('express-rate-limit');
 const { createServer } = require('http');
 const { Server: SocketIOServer } = require('socket.io');
 const { v4: uuidv4 } = require('uuid');
@@ -70,7 +71,8 @@ class PersistentStorage {
   save() {
     try {
       const tmpPath = `${this.filePath}.tmp`;
-      fs.writeFileSync(tmpPath, JSON.stringify(this.data, null, 2));
+      // 0o600: stores contain OAuth client secrets and Salesforce access tokens
+      fs.writeFileSync(tmpPath, JSON.stringify(this.data, null, 2), { mode: 0o600 });
       fs.renameSync(tmpPath, this.filePath);
     } catch (error) {
       console.error(`Failed to save ${this.filePath}:`, error.message);
@@ -185,27 +187,54 @@ setInterval(() => {
 }, 6 * 60 * 60 * 1000);
 
 // Middleware
-app.use(helmet({ contentSecurityPolicy: false }));
+app.use(helmet());
+app.use(compression());
 app.use(cors({
   origin: CLIENT_ORIGINS,
   credentials: true
 }));
 // Increase payload limit to handle large field metadata (especially picklistValues)
 app.use(express.json({ limit: '10mb' }));
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'demo-secret',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 }
+
+// Rate limits: generous general ceiling (all browser traffic arrives via the
+// Next.js proxy and may share one source IP), strict on the credential endpoint.
+app.use('/api/', rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { xForwardedForHeader: false }
+}));
+app.use('/api/auth/client-credentials', rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { xForwardedForHeader: false },
+  message: { success: false, error: 'Too many authentication attempts, please try again later.' }
 }));
 
 // Serve log files statically
 app.use('/logs', express.static(LOGS_DIR));
 
+// loadSessionIds are server-generated (load_<timestamp>_<suffix>). Reject anything
+// else before it reaches a filesystem path — an encoded ../ in the id would
+// otherwise escape LOGS_DIR (e.g. to .sessions.json, which holds access tokens).
+function isSafeLoadSessionId(id) {
+  return typeof id === 'string' && /^[\w-]+$/.test(id);
+}
+
 // Download all logs for a session as a zip file
 app.get('/api/logs/download/:loadSessionId', async (req, res) => {
   const { loadSessionId } = req.params;
-  
+
+  if (!isSafeLoadSessionId(loadSessionId)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid load session id'
+    });
+  }
+
   try {
     const logsDir = LOGS_DIR;
     
@@ -2022,11 +2051,11 @@ app.get('/api/results/:sessionId', async (req, res) => {
   try {
     const sessionId = req.params.sessionId;
     const { loadSessionId } = req.query;
-    
-    if (!loadSessionId) {
+
+    if (!loadSessionId || !isSafeLoadSessionId(loadSessionId)) {
       return res.status(400).json({
         success: false,
-        error: 'Load session ID is required',
+        error: 'A valid load session ID is required',
         timestamp: new Date().toISOString()
       });
     }
