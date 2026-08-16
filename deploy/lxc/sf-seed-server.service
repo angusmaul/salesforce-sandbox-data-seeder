@@ -1,0 +1,32 @@
+[Unit]
+Description=Salesforce Sandbox Data Seeder - API backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sfseed
+Group=sfseed
+WorkingDirectory=/opt/sf-seed/web
+EnvironmentFile=/etc/sf-seed/sf-seed.env
+Environment=NODE_ENV=production
+Environment=PORT=3001
+Environment=DATA_DIR=/var/lib/sf-seed
+Environment=LOGS_DIR=/var/lib/sf-seed/logs
+ExecStart=/usr/bin/node server/demo-server.js
+Restart=on-failure
+RestartSec=5
+
+# Graceful stop: demo-server.js flushes state and closes connections on SIGTERM
+# (force-exits itself after 8s), so allow a little more than that.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,23 @@
+# Root build context (used by web/Dockerfile.web). Keep web/ source and src/;
+# drop everything heavy or secret.
+.git
+**/node_modules
+**/.next
+**/dist
+*.tsbuildinfo
+.env
+.env.*
+web/.env
+web/.env.*
+web/.sessions.json
+web/.oauth-configs.json
+**/*.tmp
+logs
+*.log
+coverage
+.playwright-mcp
+images
+.claude
+deploy
+docker-compose.yml
+**/*.test.js

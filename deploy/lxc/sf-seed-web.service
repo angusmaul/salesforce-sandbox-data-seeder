@@ -1,0 +1,27 @@
+[Unit]
+Description=Salesforce Sandbox Data Seeder - web frontend
+After=network-online.target sf-seed-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sfseed
+Group=sfseed
+WorkingDirectory=/opt/sf-seed/web
+EnvironmentFile=/etc/sf-seed/sf-seed.env
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOSTNAME=0.0.0.0
+# `next start` serves the build in .next/ (produced by `npm run build`).
+ExecStart=/opt/sf-seed/web/node_modules/.bin/next start
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

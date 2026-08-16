@@ -69,8 +69,9 @@ SERVER_URL=...              # Public base URL of the backend (OAuth callback red
                             # default http://localhost:$PORT
 CLIENT_URL=...              # Allowed CORS origin(s), comma-separated for multiple
                             # (e.g. http://localhost:3000,http://192.168.0.x:3000)
-SERVER_INTERNAL_URL=...     # Where the Next.js server proxies /api and /logs (read at
-                            # `next start`, not baked into the build); default http://localhost:3001
+SERVER_INTERNAL_URL=...     # Where the Next.js server proxies /api and /logs. BUILD-TIME:
+                            # baked into the build by `next build` (Docker passes it as a
+                            # build arg). Single-host/LXC uses the localhost default.
 NEXT_PUBLIC_WS_URL=...      # Optional browser Socket.IO override (baked at build time);
                             # default derives from window.location, port 3001
 DATA_DIR=...                # Where .sessions.json / .oauth-configs.json are stored

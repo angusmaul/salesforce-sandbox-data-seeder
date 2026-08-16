@@ -1,0 +1,53 @@
+# Next.js frontend, standalone output.
+# Build context: the REPO ROOT (not web/), because web/shared/types re-exports
+# from ../../../src (the CLI's type definitions), and those src files import
+# @faker-js/faker + chalk from the CLI's own root node_modules. The layout is
+# mirrored as /app/web + /app/src (+ /app/node_modules) so both the relative
+# imports and their module resolution work exactly as they do in the repo.
+# The runtime stage copies only the standalone output, so the final image is small.
+
+# ---- deps (web) ----
+FROM node:20-alpine AS deps
+WORKDIR /app/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+# ---- build ----
+FROM node:20-alpine AS build
+WORKDIR /app
+# Baked into routes-manifest.json by `next build` (rewrites are build-time).
+ARG SERVER_INTERNAL_URL=http://server:3001
+ENV SERVER_INTERNAL_URL=$SERVER_INTERNAL_URL \
+    NEXT_TELEMETRY_DISABLED=1
+# CLI (root) deps so src/*.ts type imports (@faker-js/faker, chalk) resolve from /app/src
+COPY package.json package-lock.json ./
+RUN npm ci
+# web deps + sources, mirroring the repo layout
+COPY --from=deps /app/web/node_modules ./web/node_modules
+COPY web ./web
+COPY src ./src
+WORKDIR /app/web
+RUN npm run build
+
+# ---- runtime ----
+FROM node:20-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+
+RUN addgroup -S app && adduser -S app -G app
+
+# The standalone output is rooted at the web app dir and is self-contained (the
+# src/ imports are type-only, stripped at runtime, so nothing outside is traced).
+# Standard layout: server.js at the root, plus assets it doesn't bundle itself.
+COPY --from=build /app/web/public ./public
+COPY --from=build /app/web/.next/standalone ./
+COPY --from=build /app/web/.next/static ./.next/static
+
+USER app
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD wget -q --spider http://127.0.0.1:3000/ || exit 1
+CMD ["node", "server.js"]
