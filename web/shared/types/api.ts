@@ -6,6 +6,7 @@ export interface WizardSession {
   id: string;
   userId?: string;
   currentStep: WizardStep;
+  connectionId?: string;
   connectionInfo?: SalesforceConnection;
   oauthCredentials?: {
     clientId: string;
@@ -79,6 +80,22 @@ export interface ProgressUpdate {
 export interface AuthResponse {
   authUrl: string;
   state: string;
+}
+
+// A saved, reusable org connection (server masks the client secret)
+export interface SavedConnection {
+  id: string;
+  label: string;
+  instanceUrl: string | null;
+  loginUrl: string | null;
+  clientId: string;
+  clientSecretHint: string | null;
+  orgId: string | null;
+  orgName: string | null;
+  isSandbox: boolean | null;
+  createdAt: string;
+  lastUsedAt: string;
+  lastValidatedAt: string | null;
 }
 
 export interface ConnectionStatus {

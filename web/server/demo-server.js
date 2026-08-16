@@ -127,8 +127,173 @@ class PersistentStorage {
 // Initialize persistent storage
 const sessions = new PersistentStorage(SESSION_FILE);
 const oauthConfigs = new PersistentStorage(OAUTH_FILE);
+// First-class org connections, keyed by connectionId — reusable across wizard sessions.
+// (oauthConfigs is the legacy per-session store, kept for fallback during migration.)
+const CONNECTIONS_FILE = path.join(DATA_DIR, '.connections.json');
+const connections = new PersistentStorage(CONNECTIONS_FILE);
 
-console.log(`💾 Loaded ${Object.keys(sessions.data).length} existing sessions from storage`);
+console.log(`💾 Loaded ${Object.keys(sessions.data).length} existing sessions and ${Object.keys(connections.data).length} saved connections from storage`);
+
+// ---- Connection helpers ----
+
+function findConnectionByCredentials(clientId, instanceUrl) {
+  for (const [, c] of connections.entries()) {
+    if (c.clientId === clientId && (c.instanceUrl === instanceUrl || c.loginUrl === instanceUrl)) {
+      return c;
+    }
+  }
+  return null;
+}
+
+// Create or update a connection record, deduping on clientId + instanceUrl
+function upsertConnection(data) {
+  const now = new Date();
+  const match = findConnectionByCredentials(data.clientId, data.instanceUrl || data.loginUrl);
+  if (match) {
+    const updated = {
+      ...match,
+      ...data,
+      id: match.id,
+      label: data.label || match.label,
+      createdAt: match.createdAt,
+      lastUsedAt: now
+    };
+    connections.set(match.id, updated);
+    return updated;
+  }
+  const id = uuidv4();
+  const record = {
+    id,
+    label: data.label || data.orgName || (data.instanceUrl || data.loginUrl || '').replace(/^https?:\/\//, '') || 'Salesforce org',
+    clientId: data.clientId,
+    clientSecret: data.clientSecret,
+    loginUrl: data.loginUrl || null,
+    instanceUrl: data.instanceUrl || null,
+    orgId: data.orgId || null,
+    orgName: data.orgName || null,
+    isSandbox: data.isSandbox ?? null,
+    createdAt: now,
+    lastUsedAt: now,
+    lastValidatedAt: null
+  };
+  connections.set(id, record);
+  return record;
+}
+
+// Public shape: never expose the client secret
+function maskConnection(c) {
+  const { clientSecret, ...rest } = c;
+  return { ...rest, clientSecretHint: clientSecret ? `••••${clientSecret.slice(-4)}` : null };
+}
+
+// Client Credentials token exchange for a stored credential set
+async function clientCredentialsAuth({ clientId, clientSecret, loginUrl, instanceUrl }) {
+  const baseUrl = loginUrl || instanceUrl || 'https://login.salesforce.com';
+  const params = new URLSearchParams();
+  params.append('grant_type', 'client_credentials');
+  params.append('client_id', clientId);
+  params.append('client_secret', clientSecret);
+
+  const response = await fetch(`${baseUrl}/services/oauth2/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    const err = new Error(`Authentication failed: ${response.status} - ${errorText}`);
+    err.details = errorText;
+    throw err;
+  }
+  return response.json(); // { access_token, instance_url, ... }
+}
+
+// Best-effort org identity for connection labels (never throws)
+async function fetchOrgIdentity(instanceUrl, accessToken) {
+  try {
+    const conn = new jsforce.Connection({ instanceUrl, accessToken, version: '59.0' });
+    const result = await conn.query('SELECT Id, Name, IsSandbox FROM Organization LIMIT 1');
+    const org = result.records && result.records[0];
+    if (org) {
+      return { orgId: org.Id, orgName: org.Name, isSandbox: !!org.IsSandbox };
+    }
+  } catch (error) {
+    console.warn('Could not fetch org identity:', error.message);
+  }
+  return null;
+}
+
+// Resolve the credential set a session should auto-reconnect with:
+// prefer its linked connection, fall back to the legacy per-session store.
+function getCredentialsForSession(sessionId, session) {
+  if (session && session.connectionId) {
+    const c = connections.get(session.connectionId);
+    if (c && c.clientId && c.clientSecret) {
+      return { source: 'connection', connection: c, clientId: c.clientId, clientSecret: c.clientSecret, loginUrl: c.loginUrl, instanceUrl: c.instanceUrl };
+    }
+  }
+  const legacy = oauthConfigs.get(sessionId);
+  if (legacy && legacy.clientId && legacy.clientSecret) {
+    return { source: 'legacy', connection: null, clientId: legacy.clientId, clientSecret: legacy.clientSecret, loginUrl: legacy.loginUrl, instanceUrl: legacy.instanceUrl };
+  }
+  return null;
+}
+
+// Authenticate a connection and attach it to a session. Returns token + updated record.
+async function connectSessionWithConnection(sessionId, connection) {
+  const tokenResponse = await clientCredentialsAuth(connection);
+  const orgIdentity = await fetchOrgIdentity(tokenResponse.instance_url, tokenResponse.access_token);
+
+  const now = new Date();
+  const updated = {
+    ...connection,
+    instanceUrl: tokenResponse.instance_url,
+    lastUsedAt: now,
+    lastValidatedAt: now,
+    ...(orgIdentity || {})
+  };
+  connections.set(connection.id, updated);
+
+  const session = sessions.get(sessionId);
+  if (session) {
+    session.connectionId = connection.id;
+    session.connectionInfo = {
+      instanceUrl: tokenResponse.instance_url,
+      accessToken: tokenResponse.access_token,
+      apiVersion: '59.0'
+    };
+    sessions.set(sessionId, session);
+  }
+  return { tokenResponse, connection: updated };
+}
+
+// One-time (idempotent) migration: legacy per-session OAuth configs → connections
+(function migrateLegacyOauthConfigs() {
+  let migrated = 0;
+  for (const [sessionId, cfg] of oauthConfigs.entries()) {
+    if (!cfg || !cfg.clientId || !cfg.clientSecret) continue;
+    const instanceUrl = cfg.instanceUrl || cfg.loginUrl;
+    let record = findConnectionByCredentials(cfg.clientId, instanceUrl);
+    if (!record) {
+      record = upsertConnection({
+        clientId: cfg.clientId,
+        clientSecret: cfg.clientSecret,
+        loginUrl: cfg.loginUrl,
+        instanceUrl
+      });
+      migrated++;
+    }
+    const session = sessions.get(sessionId);
+    if (session && !session.connectionId) {
+      session.connectionId = record.id;
+      sessions.set(sessionId, session);
+    }
+  }
+  if (migrated > 0) {
+    console.log(`🔄 Migrated ${migrated} legacy OAuth config(s) into the connections store`);
+  }
+})();
 
 // Cleanup expired sessions (older than 24 hours)
 function cleanupExpiredSessions() {
@@ -167,8 +332,14 @@ function cleanupDuplicateSessions() {
     }
   }
   
-  // Keep only the 2 most recent unauthenticated sessions
+  // Keep only the 2 most recent unauthenticated sessions (sort by recency —
+  // object insertion order previously made the pruning arbitrary)
   if (unauthenticatedSessions.length > 2) {
+    unauthenticatedSessions.sort((a, b) => {
+      const ta = new Date(sessions.get(a)?.updatedAt || sessions.get(a)?.createdAt || 0);
+      const tb = new Date(sessions.get(b)?.updatedAt || sessions.get(b)?.createdAt || 0);
+      return tb - ta;
+    });
     const sessionsToDelete = unauthenticatedSessions.slice(2);
     sessionsToDelete.forEach(sessionId => {
       sessions.delete(sessionId);
@@ -349,6 +520,151 @@ app.get('/api/auth/config/:sessionId', (req, res) => {
   }
 });
 
+// ---- Saved org connections (first-class, reusable across sessions) ----
+
+// List saved connections (secrets masked), most recently used first
+app.get('/api/connections', (req, res) => {
+  try {
+    const list = Array.from(connections.entries())
+      .map(([, c]) => maskConnection(c))
+      .sort((a, b) => new Date(b.lastUsedAt || b.createdAt) - new Date(a.lastUsedAt || a.createdAt));
+    res.json({ success: true, data: list, timestamp: new Date().toISOString() });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// Create a connection: authenticate first, then persist (optionally attach to a session)
+app.post('/api/connections', async (req, res) => {
+  try {
+    const { label, clientId, clientSecret, loginUrl, sessionId } = req.body;
+    if (!clientId || !clientSecret) {
+      return res.status(400).json({
+        success: false,
+        error: 'clientId and clientSecret are required',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const baseUrl = (loginUrl || 'https://login.salesforce.com').trim();
+    const tokenResponse = await clientCredentialsAuth({ clientId: clientId.trim(), clientSecret: clientSecret.trim(), loginUrl: baseUrl });
+    const orgIdentity = await fetchOrgIdentity(tokenResponse.instance_url, tokenResponse.access_token);
+
+    const record = upsertConnection({
+      label: label && label.trim() ? label.trim() : undefined,
+      clientId: clientId.trim(),
+      clientSecret: clientSecret.trim(),
+      loginUrl: baseUrl,
+      instanceUrl: tokenResponse.instance_url,
+      ...(orgIdentity || {})
+    });
+    record.lastValidatedAt = new Date();
+    connections.set(record.id, record);
+
+    if (sessionId) {
+      const session = sessions.get(sessionId);
+      if (session) {
+        session.connectionId = record.id;
+        session.connectionInfo = {
+          instanceUrl: tokenResponse.instance_url,
+          accessToken: tokenResponse.access_token,
+          apiVersion: '59.0'
+        };
+        sessions.set(sessionId, session);
+      }
+    }
+
+    console.log(`🔗 Connection saved: ${record.label} (${record.instanceUrl})`);
+    res.json({
+      success: true,
+      data: {
+        connection: maskConnection(record),
+        connected: true,
+        instanceUrl: tokenResponse.instance_url,
+        organizationName: record.orgName,
+        isSandbox: record.isSandbox
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Create connection error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Authentication failed',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// One-click connect: authenticate a saved connection and attach it to a session
+app.post('/api/connections/:id/connect/:sessionId', async (req, res) => {
+  try {
+    const connection = connections.get(req.params.id);
+    if (!connection) {
+      return res.status(404).json({ success: false, error: 'Connection not found', timestamp: new Date().toISOString() });
+    }
+
+    const { tokenResponse, connection: updated } = await connectSessionWithConnection(req.params.sessionId, connection);
+    console.log(`🔗 Session ${req.params.sessionId} connected via saved connection: ${updated.label}`);
+    res.json({
+      success: true,
+      data: {
+        connected: true,
+        instanceUrl: tokenResponse.instance_url,
+        organizationName: updated.orgName,
+        isSandbox: updated.isSandbox,
+        connectionId: updated.id
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Connect via saved connection failed:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Authentication failed',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Delete a saved connection (sessions referencing it simply lose auto-reconnect)
+app.delete('/api/connections/:id', (req, res) => {
+  try {
+    const connection = connections.get(req.params.id);
+    if (!connection) {
+      return res.status(404).json({ success: false, error: 'Connection not found', timestamp: new Date().toISOString() });
+    }
+    connections.delete(req.params.id);
+    for (const [sessionId, session] of sessions.entries()) {
+      if (session.connectionId === req.params.id) {
+        delete session.connectionId;
+        sessions.set(sessionId, session);
+      }
+    }
+    console.log(`🗑️ Connection deleted: ${connection.label}`);
+    res.json({ success: true, data: { deleted: true }, timestamp: new Date().toISOString() });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// Disconnect a session from Salesforce (keeps the saved connection record)
+app.post('/api/auth/disconnect/:sessionId', (req, res) => {
+  try {
+    const session = sessions.get(req.params.sessionId);
+    if (!session) {
+      return res.status(404).json({ success: false, error: 'Session not found', timestamp: new Date().toISOString() });
+    }
+    delete session.connectionInfo;
+    delete session.connectionId;
+    session.currentStep = 'authentication';
+    sessions.set(req.params.sessionId, session);
+    res.json({ success: true, data: { disconnected: true }, timestamp: new Date().toISOString() });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message, timestamp: new Date().toISOString() });
+  }
+});
+
 // Demo routes
 app.get('/api/health', (req, res) => {
   res.json({
@@ -470,8 +786,17 @@ app.get('/api/sessions/list', async (req, res) => {
           }
         }
         
+        // Summary shape: drop the heavy analysis payloads, add connection identity
+        const connection = session.connectionId ? connections.get(session.connectionId) : null;
+        const {
+          discoveredObjects, fieldAnalysis, stateCountryMappings, generationPlan,
+          aiGenerationPlan, executionResults, configuration, ...summary
+        } = session;
         sessionList.push({
-          ...session,
+          ...summary,
+          objectCount: Array.isArray(discoveredObjects) ? discoveredObjects.length : 0,
+          orgName: connection?.orgName || null,
+          connectionLabel: connection?.label || null,
           hasConnection: isValidConnection
         });
       } else {
@@ -897,45 +1222,27 @@ app.post('/api/auth/client-credentials', async (req, res) => {
     }
     
     const baseUrl = loginUrl || 'https://login.salesforce.com';
-    const tokenUrl = `${baseUrl}/services/oauth2/token`;
-    
-    console.log(`🔐 Client Credentials authentication to: ${tokenUrl}`);
-    
-    const params = new URLSearchParams();
-    params.append('grant_type', 'client_credentials');
-    params.append('client_id', clientId);
-    params.append('client_secret', clientSecret);
-    
-    const response = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: params
-    });
-    
-    if (!response.ok) {
-      const errorData = await response.text();
-      console.error(`❌ Client credentials auth failed: ${response.status} - ${errorData}`);
-      throw new Error(`Authentication failed: ${response.status} - ${errorData}`);
-    }
-    
-    const tokenResponse = await response.json();
+    console.log(`🔐 Client Credentials authentication to: ${baseUrl}`);
+
+    const tokenResponse = await clientCredentialsAuth({ clientId, clientSecret, loginUrl: baseUrl });
     console.log(`✅ Client credentials authentication successful for: ${tokenResponse.instance_url}`);
-    
-    // Store OAuth config for auto-reconnection
-    oauthConfigs.set(sessionId, {
-      clientId: clientId,
-      clientSecret: clientSecret,
+
+    // Persist as a first-class, session-independent connection
+    const orgIdentity = await fetchOrgIdentity(tokenResponse.instance_url, tokenResponse.access_token);
+    const record = upsertConnection({
+      clientId,
+      clientSecret,
       loginUrl: baseUrl,
       instanceUrl: tokenResponse.instance_url,
-      createdAt: new Date()
+      ...(orgIdentity || {})
     });
-    console.log(`🔐 Stored OAuth config for session ${sessionId} for auto-reconnection`);
-    
-    // Update session with connection info
+    record.lastValidatedAt = new Date();
+    connections.set(record.id, record);
+
+    // Update session with connection info + connection link
     const session = sessions.get(sessionId);
     if (session) {
+      session.connectionId = record.id;
       session.connectionInfo = {
         instanceUrl: tokenResponse.instance_url,
         accessToken: tokenResponse.access_token,
@@ -943,12 +1250,15 @@ app.post('/api/auth/client-credentials', async (req, res) => {
       };
       sessions.set(sessionId, session);
     }
-    
+
     res.json({
       success: true,
       data: {
         connected: true,
-        instanceUrl: tokenResponse.instance_url
+        instanceUrl: tokenResponse.instance_url,
+        organizationName: record.orgName,
+        isSandbox: record.isSandbox,
+        connectionId: record.id
       },
       timestamp: new Date().toISOString()
     });
@@ -1158,7 +1468,13 @@ app.get('/api/auth/status/:sessionId', async (req, res) => {
   try {
     const sessionId = req.params.sessionId;
     const session = sessions.get(sessionId);
-    const oauthConfig = oauthConfigs.get(sessionId);
+    // Resolve credentials via the session's linked connection (preferred) or the
+    // legacy per-session store; shim into the shape the branches below expect.
+    const creds = getCredentialsForSession(sessionId, session);
+    const linkedConnection = creds && creds.source === 'connection' ? creds.connection : null;
+    const oauthConfig = creds
+      ? { clientId: creds.clientId, clientSecret: creds.clientSecret, loginUrl: creds.loginUrl, instanceUrl: creds.instanceUrl }
+      : null;
     
     if (session && session.connectionInfo && session.connectionInfo.accessToken) {
       // Validate the connection is still good
@@ -1172,15 +1488,20 @@ app.get('/api/auth/status/:sessionId', async (req, res) => {
         // Test the connection with a simple API call
         const identity = await conn.identity();
         
-        // Connection is valid
+        // Connection is valid — refresh the linked connection's validation stamp
+        if (linkedConnection) {
+          linkedConnection.lastValidatedAt = new Date();
+          connections.set(linkedConnection.id, linkedConnection);
+        }
         res.json({
           success: true,
           data: {
             connected: true,
             instanceUrl: session.connectionInfo.instanceUrl,
-            organizationName: session.connectionInfo.organizationName || identity.organization_id,
-            isSandbox: session.connectionInfo.isSandbox,
-            sandboxInfo: session.connectionInfo.sandboxInfo
+            organizationName: linkedConnection?.orgName || session.connectionInfo.organizationName || identity.organization_id,
+            isSandbox: linkedConnection ? linkedConnection.isSandbox : session.connectionInfo.isSandbox,
+            sandboxInfo: session.connectionInfo.sandboxInfo,
+            connectionId: session.connectionId || null
           },
           timestamp: new Date().toISOString()
         });

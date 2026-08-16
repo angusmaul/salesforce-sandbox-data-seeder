@@ -1,40 +1,58 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { 
-  CloudArrowUpIcon, 
-  CogIcon, 
+import {
+  CloudArrowUpIcon,
+  CogIcon,
   ShieldCheckIcon,
   ChartBarIcon,
   LightBulbIcon,
-  RocketLaunchIcon
+  RocketLaunchIcon,
+  ClockIcon,
+  ArrowRightIcon
 } from '@heroicons/react/24/outline';
+
+interface RecentSession {
+  id: string;
+  currentStep: string;
+  updatedAt: string;
+  orgName: string | null;
+  connectionLabel: string | null;
+  hasConnection: boolean;
+  objectCount?: number;
+}
+
+const STEP_LABELS: { [step: string]: string } = {
+  authentication: 'Connect',
+  discovery: 'Discovery',
+  selection: 'Selection',
+  configuration: 'Configuration',
+  preview: 'Preview',
+  execution: 'Execution',
+  results: 'Results'
+};
 
 export default function HomePage() {
   const router = useRouter();
+  const [recentSessions, setRecentSessions] = useState<RecentSession[]>([]);
+
+  useEffect(() => {
+    // Offer recent sessions (last 24h) for explicit resume
+    fetch('/api/sessions/list')
+      .then((res) => res.json())
+      .then((result) => {
+        if (result.success && Array.isArray(result.data)) {
+          setRecentSessions(result.data.slice(0, 5));
+        }
+      })
+      .catch((error) => console.error('Failed to load recent sessions:', error));
+  }, []);
 
   const handleStartWizard = async () => {
     try {
-      // First, check for existing sessions that might be reusable
-      const listResponse = await fetch('/api/sessions/list');
-      const listResult = await listResponse.json();
-      
-      if (listResult.success && listResult.data && listResult.data.length > 0) {
-        // Find the most recent session that isn't in results step
-        const reusableSession = listResult.data
-          .filter((s: any) => s.currentStep !== 'results')
-          .sort((a: any, b: any) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
-        
-        if (reusableSession) {
-          // Use the existing session
-          console.log('Reusing existing session:', reusableSession.id);
-          router.push(`/wizard?session=${reusableSession.id}`);
-          return;
-        }
-      }
-      
-      // No reusable session found, create a new one
+      // Always start fresh — saved connections make reconnecting one click,
+      // and previous runs are offered explicitly in the resume list below.
       const response = await fetch('/api/sessions/create', {
         method: 'POST',
         headers: {
@@ -42,9 +60,9 @@ export default function HomePage() {
         },
         body: JSON.stringify({}),
       });
-      
+
       const result = await response.json();
-      
+
       if (result.success) {
         router.push(`/wizard?session=${result.data.sessionId}`);
       } else {
@@ -53,6 +71,10 @@ export default function HomePage() {
     } catch (error) {
       console.error('Error creating session:', error);
     }
+  };
+
+  const handleResumeSession = (sessionId: string) => {
+    router.push(`/wizard?session=${sessionId}`);
   };
 
   const features = [
@@ -152,14 +174,53 @@ export default function HomePage() {
                 Start Data Generation Wizard
               </button>
               
-              <Link 
-                href="/docs" 
+              <Link
+                href="/docs"
                 className="btn-outline text-lg px-8 py-3 hover:shadow-md transition-all duration-200"
               >
                 View Documentation
               </Link>
             </div>
           </div>
+
+          {/* Resume Previous Session */}
+          {recentSessions.length > 0 && (
+            <div className="mt-12 max-w-2xl mx-auto">
+              <div className="card">
+                <div className="flex items-center mb-4">
+                  <ClockIcon className="h-5 w-5 text-gray-400 mr-2" />
+                  <h3 className="font-semibold text-gray-900">Resume a previous session</h3>
+                </div>
+                <div className="divide-y divide-gray-100">
+                  {recentSessions.map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => handleResumeSession(s.id)}
+                      className="w-full flex items-center justify-between py-3 px-2 hover:bg-gray-50 rounded transition-colors text-left"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center">
+                          <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-800 rounded-full mr-2">
+                            {STEP_LABELS[s.currentStep] || s.currentStep}
+                          </span>
+                          <span className="font-medium text-gray-900 truncate">
+                            {s.connectionLabel || s.orgName || 'Not connected yet'}
+                          </span>
+                          {s.hasConnection && (
+                            <span className="ml-2 h-2 w-2 bg-green-500 rounded-full flex-shrink-0" title="Connection active"></span>
+                          )}
+                        </div>
+                        <p className="text-sm text-gray-500 mt-0.5">
+                          Last activity {new Date(s.updatedAt).toLocaleString()}
+                        </p>
+                      </div>
+                      <ArrowRightIcon className="h-4 w-4 text-gray-400 flex-shrink-0 ml-3" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Features Grid */}
           <div className="mt-20">

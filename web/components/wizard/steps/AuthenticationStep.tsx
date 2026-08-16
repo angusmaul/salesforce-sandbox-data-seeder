@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { toast } from 'react-hot-toast';
-import { 
-  ShieldCheckIcon, 
+import {
+  ShieldCheckIcon,
   ExclamationTriangleIcon,
   CheckCircleIcon,
   EyeIcon,
-  EyeSlashIcon
+  EyeSlashIcon,
+  BuildingOfficeIcon,
+  TrashIcon
 } from '@heroicons/react/24/outline';
-import { WizardSession, WizardStep, ConnectionStatus } from '../../../shared/types/api';
+import { WizardSession, WizardStep, ConnectionStatus, SavedConnection } from '../../../shared/types/api';
 import { Socket } from 'socket.io-client';
 
 interface AuthenticationStepProps {
@@ -27,13 +29,78 @@ export default function AuthenticationStep({
   const [instanceUrl, setInstanceUrl] = useState('');
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
+  const [connectionLabel, setConnectionLabel] = useState('');
   const [showClientSecret, setShowClientSecret] = useState(false);
   const [showCredentialsForm, setShowCredentialsForm] = useState(true);
-  
+  const [savedConnections, setSavedConnections] = useState<SavedConnection[]>([]);
+  const [connectingId, setConnectingId] = useState<string | null>(null);
+
   useEffect(() => {
-    // Check if already connected
+    // Check if already connected, and load saved connections for the picker
     checkConnectionStatus();
+    loadConnections();
   }, [session.id]);
+
+  const loadConnections = async () => {
+    try {
+      const response = await fetch('/api/connections');
+      const result = await response.json();
+      if (result.success && Array.isArray(result.data)) {
+        setSavedConnections(result.data);
+        // Prefer the picker over the empty form when saved connections exist
+        if (result.data.length > 0 && !clientId.trim()) {
+          setShowCredentialsForm(false);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load saved connections:', error);
+    }
+  };
+
+  const handleConnectSaved = async (conn: SavedConnection) => {
+    try {
+      setConnectingId(conn.id);
+      const response = await fetch(`/api/connections/${conn.id}/connect/${session.id}`, {
+        method: 'POST',
+      });
+      const result = await response.json();
+
+      if (result.success) {
+        setConnectionStatus({
+          connected: true,
+          instanceUrl: result.data.instanceUrl,
+          organizationName: result.data.organizationName,
+          isSandbox: result.data.isSandbox
+        });
+        toast.success(`Connected to ${result.data.organizationName || conn.label}`);
+      } else {
+        toast.error(result.error || 'Failed to connect with saved connection');
+        setShowCredentialsForm(true);
+      }
+    } catch (error) {
+      console.error('Saved connection error:', error);
+      toast.error('Failed to connect with saved connection');
+    } finally {
+      setConnectingId(null);
+    }
+  };
+
+  const handleDeleteConnection = async (conn: SavedConnection) => {
+    if (!window.confirm(`Remove the saved connection "${conn.label}"?`)) return;
+    try {
+      const response = await fetch(`/api/connections/${conn.id}`, { method: 'DELETE' });
+      const result = await response.json();
+      if (result.success) {
+        setSavedConnections(prev => prev.filter(c => c.id !== conn.id));
+        toast.success('Connection removed');
+      } else {
+        toast.error(result.error || 'Failed to remove connection');
+      }
+    } catch (error) {
+      console.error('Delete connection error:', error);
+      toast.error('Failed to remove connection');
+    }
+  };
   
   const checkConnectionStatus = async () => {
     try {
@@ -90,49 +157,32 @@ export default function AuthenticationStep({
         return;
       }
       
-      // First save the OAuth config for this session
-      const configResponse = await fetch('/api/auth/config', {
+      // Authenticate and save as a reusable connection in one call
+      const response = await fetch('/api/connections', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          clientId: clientId.trim(),
-          clientSecret: clientSecret.trim(),
-          instanceUrl: effectiveLoginUrl,
-          sessionId: session.id
-        }),
-      });
-      
-      const configResult = await configResponse.json();
-      if (!configResult.success) {
-        toast.error('Failed to save OAuth configuration');
-        return;
-      }
-      
-      // Use Client Credentials Flow (like CLI)
-      const response = await fetch('/api/auth/client-credentials', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
+          label: connectionLabel.trim() || undefined,
           sessionId: session.id,
           clientId: clientId.trim(),
           clientSecret: clientSecret.trim(),
-          loginUrl: effectiveLoginUrl 
+          loginUrl: effectiveLoginUrl
         }),
       });
-      
+
       const result = await response.json();
-      
+
       if (result.success) {
-        // Authentication successful
         setConnectionStatus({
           connected: true,
-          instanceUrl: result.data.instanceUrl
+          instanceUrl: result.data.instanceUrl,
+          organizationName: result.data.organizationName,
+          isSandbox: result.data.isSandbox
         });
         toast.success('Successfully connected to Salesforce!');
+        loadConnections(); // refresh the saved-connections list
       } else {
         toast.error(result.error || 'Failed to authenticate');
       }
@@ -289,6 +339,74 @@ export default function AuthenticationStep({
         </div>
       )}
 
+      {/* Saved Connections Picker */}
+      {!connectionStatus?.connected && !connectionStatus?.setupRequired && savedConnections.length > 0 && (
+        <div className="mb-6">
+          <h3 className="font-medium text-gray-900 mb-3">Saved connections</h3>
+          <div className="space-y-3">
+            {savedConnections.map((conn) => (
+              <div
+                key={conn.id}
+                className="flex items-center justify-between p-4 bg-white border border-gray-200 rounded-lg hover:border-blue-300 transition-colors"
+              >
+                <div className="flex items-center min-w-0">
+                  <BuildingOfficeIcon className="h-8 w-8 text-blue-500 mr-3 flex-shrink-0" />
+                  <div className="min-w-0">
+                    <div className="flex items-center">
+                      <p className="font-medium text-gray-900 truncate">{conn.label}</p>
+                      {conn.isSandbox && (
+                        <span className="ml-2 px-2 py-0.5 text-xs bg-amber-100 text-amber-800 rounded-full flex-shrink-0">
+                          Sandbox
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-gray-500 truncate">
+                      {conn.orgName && conn.orgName !== conn.label ? `${conn.orgName} · ` : ''}
+                      {conn.instanceUrl || conn.loginUrl}
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      Last used {new Date(conn.lastUsedAt).toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center space-x-2 ml-4 flex-shrink-0">
+                  <button
+                    onClick={() => handleConnectSaved(conn)}
+                    disabled={connectingId !== null}
+                    className="btn-primary text-sm"
+                  >
+                    {connectingId === conn.id ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                        Connecting...
+                      </>
+                    ) : (
+                      'Connect'
+                    )}
+                  </button>
+                  <button
+                    onClick={() => handleDeleteConnection(conn)}
+                    disabled={connectingId !== null}
+                    className="text-gray-400 hover:text-red-500 p-1"
+                    title="Remove saved connection"
+                  >
+                    <TrashIcon className="h-5 w-5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          {!showCredentialsForm && (
+            <button
+              onClick={() => setShowCredentialsForm(true)}
+              className="mt-3 text-sm text-blue-600 hover:text-blue-800 font-medium"
+            >
+              + Connect a different org
+            </button>
+          )}
+        </div>
+      )}
+
       {/* OAuth Credentials Form */}
       {showCredentialsForm && !connectionStatus?.connected && !connectionStatus?.setupRequired && (
         <div className="space-y-6">
@@ -296,6 +414,23 @@ export default function AuthenticationStep({
             <h3 className="font-medium text-blue-800 mb-2">Salesforce External Client App Credentials</h3>
             <p className="text-sm text-blue-700 mb-4">
               Enter your Salesforce External Client App credentials to continue. You can find these in your Salesforce org under Setup → Apps → External Client Apps.
+            </p>
+          </div>
+
+          {/* Connection Label */}
+          <div>
+            <label className="label">
+              Connection Name <span className="text-gray-400">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={connectionLabel}
+              onChange={(e) => setConnectionLabel(e.target.value)}
+              placeholder="e.g. Dev Sandbox"
+              className="input"
+            />
+            <p className="text-sm text-gray-500 mt-1">
+              A friendly name for this org — it will be saved for one-click reconnection.
             </p>
           </div>
 
@@ -402,7 +537,7 @@ export default function AuthenticationStep({
         
         <div className="flex space-x-3">
           {!connectionStatus?.connected ? (
-            <>
+            showCredentialsForm && (
               <button
                 onClick={handleAuthenticate}
                 disabled={loading || !clientId.trim() || !clientSecret.trim()}
@@ -417,7 +552,7 @@ export default function AuthenticationStep({
                   'Connect to Salesforce'
                 )}
               </button>
-            </>
+            )
           ) : (
             <button
               onClick={handleContinue}
