@@ -13,6 +13,7 @@ const { analyzeFields: aiAnalyzeFields, applyOverrides: aiApplyOverrides } = req
 const aiProviders = require('./services/ai-providers');
 const { buildCorrelatedContext, generateFromLibrary, listAvailableGenerators } = require('./lib/field-data-library');
 const { getCachedMapping, getRandomStateForCountry } = require('./lib/picklist-decoder');
+const { insertWithRetry } = require('./lib/insert-retry');
 const archiver = require('archiver');
 const jsforce = require('jsforce');
 const fs = require('fs');
@@ -3029,13 +3030,45 @@ async function startDataGeneration(sessionId, configuration, globalSettings, fie
           io.to(sessionId).emit('execution-log', `Sample record fields: ${Object.keys(records[0]).join(', ')}`);
           
           try {
-            // allowRecursive: jsforce only chunks past the 200-record sObject
-            // Collections limit when this is set — without it, >200 records fails wholesale
-            const results = await conn.sobject(objectName).create(records, { allowRecursive: true });
-            const resultsArray = Array.isArray(results) ? results : [results];
+            // Error-driven retry: failed records are remediated per error code
+            // (drop/truncate/re-pick/uniquify/fill) and resubmitted, up to 3
+            // passes. allowRecursive lets jsforce chunk past the 200-record
+            // sObject Collections limit.
+            const objectFields = fieldAnalysis[objectName]?.fields || [];
+            const { resultsArray, retrySummary, learnedDropFields } = await insertWithRetry(
+              (payload) => conn.sobject(objectName).create(payload, { allowRecursive: true }),
+              objectName,
+              records,
+              {
+                fieldsByName: new Map(objectFields.map(f => [f.name, f])),
+                regenerateField: (meta, attempt) =>
+                  generateFieldValueWithContext(meta, attempt, objectName, sessionId, { recordIndex: attempt }),
+                onLog: (msg) => io.to(sessionId).emit('execution-log', msg)
+              }
+            );
             const successCount = resultsArray.filter(r => r.success).length;
             const failures = resultsArray.filter(r => !r.success);
             currentObjectSuccessCount = successCount;
+
+            if (retrySummary.recoveredRecords > 0) {
+              io.to(sessionId).emit('execution-log',
+                `♻️ Recovered ${retrySummary.recoveredRecords} ${objectName} record(s) via retry (${retrySummary.attempts} passes)`);
+            }
+            // Remember fields whose removal fixed most retried records, so later
+            // runs in this session skip them at generation time
+            if (learnedDropFields.length > 0) {
+              const freshSession = sessions.get(sessionId);
+              if (freshSession) {
+                if (!freshSession.learnedFieldBlocklist) freshSession.learnedFieldBlocklist = {};
+                freshSession.learnedFieldBlocklist[objectName] = Array.from(new Set([
+                  ...(freshSession.learnedFieldBlocklist[objectName] || []),
+                  ...learnedDropFields
+                ]));
+                sessions.set(sessionId, freshSession);
+                io.to(sessionId).emit('execution-log',
+                  `📚 Learned to skip ${objectName} field(s) for this session: ${learnedDropFields.join(', ')}`);
+              }
+            }
             
             // Prepare object result for logging
             const objectEndTime = new Date();
@@ -3047,6 +3080,7 @@ async function startDataGeneration(sessionId, configuration, globalSettings, fie
               successRate: `${((successCount / records.length) * 100).toFixed(1)}%`,
               timeTaken: `${objectEndTime.getTime() - objectStartTime.getTime()}ms`,
               generatedData: records,
+              retrySummary,
               results: {
                 // Results are input-ordered, so position IS the record index.
                 // (indexOf misattributes records when result objects compare equal.)
@@ -3056,7 +3090,8 @@ async function startDataGeneration(sessionId, configuration, globalSettings, fie
                   .map(({ result, idx }) => ({
                     recordIndex: idx + 1,
                     recordId: result.id,
-                    data: records[idx]
+                    data: records[idx],
+                    ...(result.attempts > 1 ? { attempts: result.attempts, retryHistory: result.retryHistory } : {})
                   })),
                 failed: resultsArray
                   .map((result, idx) => ({ result, idx }))
@@ -3064,7 +3099,8 @@ async function startDataGeneration(sessionId, configuration, globalSettings, fie
                   .map(({ result, idx }) => ({
                     recordIndex: idx + 1,
                     data: records[idx],
-                    errors: result.errors || [{ message: 'Unknown error', statusCode: 'UNKNOWN' }]
+                    errors: result.errors || [{ message: 'Unknown error', statusCode: 'UNKNOWN' }],
+                    ...(result.attempts > 1 ? { attempts: result.attempts, retryHistory: result.retryHistory } : {})
                   }))
               }
             };
@@ -3520,6 +3556,10 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
     }
   }
   
+  // Fields the retry loop learned to drop earlier in this session (their
+  // removal fixed most retried records) — skip them at generation time
+  const learnedBlocklist = new Set(sessions.get(sessionId)?.learnedFieldBlocklist?.[objectName] || []);
+
   // Address integrity: when a StateCode/CountryCode field exists, Salesforce
   // derives the corresponding text State/Country field from it. Sending both
   // caused FIELD_INTEGRITY_EXCEPTION ("Mismatched integration value and ISO
@@ -3551,7 +3591,13 @@ async function generateSampleRecords(objectName, recordCount, fieldAnalysis, con
       return false;
     }
     
-    // PRIORITY 4: Address integrity — never write text twins of code fields,
+    // PRIORITY 4: Fields the retry loop learned are unwritable in this org
+    if (learnedBlocklist.has(field.name)) {
+      console.log(`⚠️ Skipping field learned via retry: ${field.name}`);
+      return false;
+    }
+
+    // PRIORITY 5: Address integrity — never write text twins of code fields,
     // and GeocodeAccuracy is populated by Salesforce's geocoding service
     if (suppressedAddressTextFields.has(field.name)) {
       console.log(`⚠️ Skipping address text field (code twin exists): ${field.name}`);
