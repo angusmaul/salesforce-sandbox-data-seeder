@@ -57,3 +57,6 @@ test-objects.json
 # MCP config files
 mcp-*.json
 mcp-*.js
+# Local tool state
+.claude/settings.local.json
+.playwright-mcp/

@@ -1505,12 +1505,12 @@ app.get('/api/auth/oauth/callback', async (req, res) => {
     sessions.set(sessionId, session);
     
     // Redirect to client with session ID
-    const clientUrl = `http://172.22.84.156:3000`;
+    const clientUrl = CLIENT_ORIGINS[0] || 'http://localhost:3000';
     res.redirect(`${clientUrl}/wizard?session=${sessionId}&step=discovery`);
-    
+
   } catch (error) {
     console.error('OAuth callback error:', error);
-    const clientUrl = `http://172.22.84.156:3000`;
+    const clientUrl = CLIENT_ORIGINS[0] || 'http://localhost:3000';
     const errorMessage = error.message || 'Authentication failed';
     res.redirect(`${clientUrl}/wizard?error=${encodeURIComponent(errorMessage)}`);
   }
