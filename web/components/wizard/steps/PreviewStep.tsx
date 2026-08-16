@@ -23,8 +23,6 @@ import {
 } from '../../../shared/types/api';
 import { Socket } from 'socket.io-client';
 
-const API_BASE = 'http://localhost:3001';
-
 interface PreviewStepProps {
   session: WizardSession;
   onNext: (step: WizardStep) => void;
@@ -66,7 +64,7 @@ export default function PreviewStep({
 
   // Load categories list for override dropdowns
   useEffect(() => {
-    fetch(`${API_BASE}/api/ai/categories`)
+    fetch(`/api/ai/categories`)
       .then(r => r.json())
       .then(res => { if (res.success) setCategories(res.data); })
       .catch(() => {});
@@ -75,7 +73,7 @@ export default function PreviewStep({
   // Load existing AI plan from session on mount
   useEffect(() => {
     if (!aiPlan && session.id) {
-      fetch(`${API_BASE}/api/ai/generation-plan/${session.id}`)
+      fetch(`/api/ai/generation-plan/${session.id}`)
         .then(r => r.json())
         .then(res => { if (res.success && res.data) setAiPlan(res.data); })
         .catch(() => {});
@@ -170,7 +168,7 @@ export default function PreviewStep({
     if (!session.id) return;
     setIsAnalyzing(true);
     try {
-      const res = await fetch(`${API_BASE}/api/ai/analyze-fields/${session.id}`, { method: 'POST' });
+      const res = await fetch(`/api/ai/analyze-fields/${session.id}`, { method: 'POST' });
       const data = await res.json();
       if (data.success) {
         setAiPlan(data.data);
@@ -191,7 +189,7 @@ export default function PreviewStep({
     if (!session.id) return;
     setLoadingSamples(prev => new Set(prev).add(objectName));
     try {
-      const res = await fetch(`${API_BASE}/api/ai/sample-values/${session.id}/${objectName}?count=3`);
+      const res = await fetch(`/api/ai/sample-values/${session.id}/${objectName}?count=3`);
       const data = await res.json();
       if (data.success) {
         setSampleRecords(prev => ({ ...prev, [objectName]: data.data }));
@@ -213,7 +211,7 @@ export default function PreviewStep({
     if (!session.id || !aiPlan) return;
     const overrides = { [objectName]: { [fieldName]: { category, subcategory } } };
     try {
-      const res = await fetch(`${API_BASE}/api/ai/generation-plan/${session.id}`, {
+      const res = await fetch(`/api/ai/generation-plan/${session.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ overrides })
@@ -236,7 +234,7 @@ export default function PreviewStep({
     setCompanyProfile(profile);
     if (!session.id) return;
     try {
-      await fetch(`${API_BASE}/api/ai/generation-plan/${session.id}`, {
+      await fetch(`/api/ai/generation-plan/${session.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ companyProfile: profile })

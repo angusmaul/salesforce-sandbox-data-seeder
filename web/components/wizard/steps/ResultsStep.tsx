@@ -90,7 +90,7 @@ export default function ResultsStep({
     if (!loadSessionId) return;
     // Use location.href instead of window.open to avoid pop-up blockers
     // Server sets Content-Disposition: attachment so browser downloads without navigating
-    window.location.href = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/logs/download/${loadSessionId}`;
+    window.location.href = `/api/logs/download/${loadSessionId}`;
   };
 
   const handleExportResults = () => {

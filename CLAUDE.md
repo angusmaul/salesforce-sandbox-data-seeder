@@ -61,15 +61,29 @@ npm run dev              # Starts both server (3001) and client (3000)
 
 ### Environment Variables (web/.env)
 
+All URLs default to localhost, so a bare dev setup needs none of them.
+
 ```
-PORT=3001
-NEXT_PUBLIC_SERVER_URL=http://localhost:3001
-NEXT_PUBLIC_WS_URL=ws://localhost:3001
-CLIENT_URL=http://localhost:3000
+PORT=3001                   # Express backend port
+SERVER_URL=...              # Public base URL of the backend (OAuth callback redirect URIs);
+                            # default http://localhost:$PORT
+CLIENT_URL=...              # Allowed CORS origin(s), comma-separated for multiple
+                            # (e.g. http://localhost:3000,http://192.168.0.x:3000)
+SERVER_INTERNAL_URL=...     # Where the Next.js server proxies /api and /logs (read at
+                            # `next start`, not baked into the build); default http://localhost:3001
+NEXT_PUBLIC_WS_URL=...      # Optional browser Socket.IO override (baked at build time);
+                            # default derives from window.location, port 3001
+DATA_DIR=...                # Where .sessions.json / .oauth-configs.json are stored
+                            # (auto-created); default web/
+LOGS_DIR=...                # Where load logs are written and served from (auto-created);
+                            # default <repo>/logs
 SF_CLIENT_ID=...
 SF_CLIENT_SECRET=...
 ANTHROPIC_API_KEY=...       # Optional, enables AI field classification
 ```
+
+The browser talks to the backend via relative `/api` and `/logs` URLs proxied through
+Next.js rewrites — only the Socket.IO connection goes direct to port 3001.
 
 ### Running Tests
 
@@ -92,8 +106,8 @@ npm run build            # tsc → dist/
 
 # Web
 cd web
-npm run build            # server:build + client:build
-npm start                # Runs compiled server
+npm run build            # next build (the Express server is plain JS, nothing to compile)
+npm start                # Runs backend (server/demo-server.js) + frontend (next start)
 ```
 
 ## Code Conventions

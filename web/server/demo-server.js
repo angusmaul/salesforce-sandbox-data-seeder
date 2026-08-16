@@ -18,20 +18,33 @@ const path = require('path');
 // Use native fetch in Node.js 18+ or polyfill for older versions
 const fetch = globalThis.fetch || require('node-fetch');
 
+const PORT = process.env.PORT || 3001;
+// Public base URL of this API server (used for OAuth callback redirect URIs)
+const SERVER_URL = process.env.SERVER_URL || `http://localhost:${PORT}`;
+// Allowed browser origins for CORS; comma-separated for multiple (e.g. LAN IP + domain)
+const CLIENT_ORIGINS = (process.env.CLIENT_URL || 'http://localhost:3000')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+// Writable state locations — override for containerized deployments (volume mounts).
+// Defaults preserve the historical locations: web/ for state files, repo-root logs/.
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..');
+const LOGS_DIR = process.env.LOGS_DIR || LOGS_DIR;
+fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(LOGS_DIR, { recursive: true });
+
 const app = express();
 const server = createServer(app);
 const io = new SocketIOServer(server, {
   cors: {
-    origin: "http://localhost:3000",
+    origin: CLIENT_ORIGINS,
     methods: ["GET", "POST"]
   }
 });
 
-const PORT = process.env.PORT || 3001;
-
 // File paths for persistent storage
-const SESSION_FILE = path.join(__dirname, '../.sessions.json');
-const OAUTH_FILE = path.join(__dirname, '../.oauth-configs.json');
+const SESSION_FILE = path.join(DATA_DIR, '.sessions.json');
+const OAUTH_FILE = path.join(DATA_DIR, '.oauth-configs.json');
 
 // Persistent session and OAuth storage
 class PersistentStorage {
@@ -153,27 +166,27 @@ setInterval(() => {
 // Middleware
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({
-  origin: "http://localhost:3000",
+  origin: CLIENT_ORIGINS,
   credentials: true
 }));
 // Increase payload limit to handle large field metadata (especially picklistValues)
 app.use(express.json({ limit: '10mb' }));
 app.use(session({
-  secret: 'demo-secret',
+  secret: process.env.SESSION_SECRET || 'demo-secret',
   resave: false,
   saveUninitialized: false,
   cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 }
 }));
 
 // Serve log files statically
-app.use('/logs', express.static(path.join(__dirname, '../../logs')));
+app.use('/logs', express.static(LOGS_DIR));
 
 // Download all logs for a session as a zip file
 app.get('/api/logs/download/:loadSessionId', async (req, res) => {
   const { loadSessionId } = req.params;
   
   try {
-    const logsDir = path.join(__dirname, '../../logs');
+    const logsDir = LOGS_DIR;
     
     // Check if main log file exists
     const mainLogPath = path.join(logsDir, `${loadSessionId}.json`);
@@ -948,7 +961,7 @@ app.post('/api/auth/oauth/init', (req, res) => {
       timestamp: Date.now()
     });
     
-    const redirectUri = `http://localhost:3001/api/auth/oauth/callback`;
+    const redirectUri = `${SERVER_URL}/api/auth/oauth/callback`;
     
     // Construct Salesforce OAuth URL
     const authUrl = `${oauthBaseUrl}/services/oauth2/authorize?` +
@@ -1056,7 +1069,7 @@ async function exchangeCodeForToken(code, sessionId, loginUrl) {
     console.log(`🔐 Using environment credentials for token exchange`);
   }
   
-  const redirectUri = `http://localhost:3001/api/auth/oauth/callback`;
+  const redirectUri = `${SERVER_URL}/api/auth/oauth/callback`;
   
   if (!clientId || !clientSecret) {
     throw new Error('Missing Salesforce OAuth credentials');
@@ -2000,7 +2013,7 @@ app.get('/api/results/:sessionId', async (req, res) => {
     console.log(`📊 Fetching results data for session: ${sessionId}, loadSessionId: ${loadSessionId}`);
     
     // Read main log file
-    const mainLogPath = path.join(__dirname, '../../logs', `${loadSessionId}.json`);
+    const mainLogPath = path.join(LOGS_DIR,`${loadSessionId}.json`);
     if (!fs.existsSync(mainLogPath)) {
       return res.status(404).json({
         success: false,
@@ -2013,7 +2026,7 @@ app.get('/api/results/:sessionId', async (req, res) => {
     
     // Read per-object log files
     const objectResults = {};
-    const logsDir = path.join(__dirname, '../../logs');
+    const logsDir = LOGS_DIR;
     const logFiles = fs.readdirSync(logsDir).filter(file => 
       file.startsWith(`${loadSessionId}_`) && file.endsWith('.json')
     );
@@ -2722,7 +2735,7 @@ async function startDataGeneration(sessionId, configuration, globalSettings, fie
           
           // Write individual object log file
           try {
-            const objectLogPath = path.join(__dirname, '../../logs', `${loadSessionId}_${objectName}.json`);
+            const objectLogPath = path.join(LOGS_DIR,`${loadSessionId}_${objectName}.json`);
             const logsDir = path.dirname(objectLogPath);
             if (!fs.existsSync(logsDir)) {
               fs.mkdirSync(logsDir, { recursive: true });
@@ -2805,7 +2818,7 @@ async function startDataGeneration(sessionId, configuration, globalSettings, fie
         
         // Write individual error object log file
         try {
-          const objectLogPath = path.join(__dirname, '../../logs', `${loadSessionId}_${config.name}.json`);
+          const objectLogPath = path.join(LOGS_DIR,`${loadSessionId}_${config.name}.json`);
           const logsDir = path.dirname(objectLogPath);
           if (!fs.existsSync(logsDir)) {
             fs.mkdirSync(logsDir, { recursive: true });
@@ -2877,7 +2890,7 @@ async function startDataGeneration(sessionId, configuration, globalSettings, fie
       .map(([error, count]) => ({ error, count }));
     
     // Write log file to logs directory
-    const logPath = path.join(__dirname, '../../logs', `${loadSessionId}.json`);
+    const logPath = path.join(LOGS_DIR,`${loadSessionId}.json`);
     try {
       // Ensure logs directory exists
       const logsDir = path.dirname(logPath);
@@ -2920,7 +2933,7 @@ async function startDataGeneration(sessionId, configuration, globalSettings, fie
       loadLog.summary.totalTimeTaken = endTime.getTime() - startTime.getTime();
       loadLog.summary.successRate = 0;
       
-      const logPath = path.join(__dirname, '../../logs', `${loadSessionId}.json`);
+      const logPath = path.join(LOGS_DIR,`${loadSessionId}.json`);
       const logsDir = path.dirname(logPath);
       if (!fs.existsSync(logsDir)) {
         fs.mkdirSync(logsDir, { recursive: true });
@@ -4324,11 +4337,8 @@ app.use('/api/*', (req, res) => {
 // Start server
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Demo Server running on port ${PORT}`);
-  console.log(`📊 Environment: development`);
-  console.log(`🔗 API URL: http://localhost:${PORT}/api`);
-  console.log(`🌐 Client URL: http://localhost:3000`);
-  console.log('');
-  console.log('⚠️  DEMO MODE: Configure Salesforce OAuth in .env for full functionality');
+  console.log(`🔗 API URL: ${SERVER_URL}/api`);
+  console.log(`🌐 Allowed client origin(s): ${CLIENT_ORIGINS.join(', ')}`);
 });
 
 module.exports = app;

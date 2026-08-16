@@ -136,7 +136,7 @@ export default function ErrorAnalysis({ errorAnalysis, loadSessionId }: ErrorAna
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        window.open(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/logs/${loadSessionId}_${objectError.name}.json`, '_blank');
+                        window.open(`/logs/${loadSessionId}_${objectError.name}.json`, '_blank');
                       }}
                       className="text-blue-600 hover:text-blue-800 text-sm flex items-center"
                     >
