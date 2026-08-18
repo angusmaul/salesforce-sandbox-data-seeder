@@ -1,0 +1,52 @@
+# Salesforce Sandbox Data Seeder — run from prebuilt GHCR images (no clone/build needed).
+#
+#   curl -O https://raw.githubusercontent.com/angusmaul/salesforce-sandbox-data-seeder/main/docker-compose.prebuilt.yml
+#   curl -o .env https://raw.githubusercontent.com/angusmaul/salesforce-sandbox-data-seeder/main/docker.env.example
+#   # edit .env: set SESSION_SECRET
+#   docker compose -f docker-compose.prebuilt.yml up -d
+#
+# Pin a version with IMAGE_TAG in .env (e.g. IMAGE_TAG=1.1.0); defaults to latest.
+# Same runtime notes as docker-compose.yml: browse to http://<host>:3000, port 3001
+# must also be reachable (direct Socket.IO), and for any non-localhost host set
+# CLIENT_URL to that host's :3000 origin.
+#
+# NOTE: the web image is built with SERVER_INTERNAL_URL=http://server:3001 baked in,
+# so the backend service must keep the name "server" (it does, below).
+
+services:
+  server:
+    image: ghcr.io/angusmaul/salesforce-sandbox-data-seeder-server:${IMAGE_TAG:-latest}
+    init: true            # forward SIGTERM / reap, belt-and-suspenders for graceful shutdown
+    environment:
+      PORT: 3001
+      SERVER_URL: ${SERVER_URL:-http://localhost:3001}
+      CLIENT_URL: ${CLIENT_URL:-http://localhost:3000}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      SF_CLIENT_ID: ${SF_CLIENT_ID:-}
+      SF_CLIENT_SECRET: ${SF_CLIENT_SECRET:-}
+      # Optional fallback: AI providers are normally configured in the UI
+      # (Anthropic / OpenAI-compatible / Ollama). To use an Ollama instance on
+      # the Docker host, set its Base URL to http://host.docker.internal:11434.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DATA_DIR: /data
+      LOGS_DIR: /logs
+    volumes:
+      - seed-data:/data
+      - seed-logs:/logs
+    ports:
+      - "3001:3001"       # required: browser connects here directly for Socket.IO
+    restart: unless-stopped
+
+  web:
+    image: ghcr.io/angusmaul/salesforce-sandbox-data-seeder-web:${IMAGE_TAG:-latest}
+    depends_on:
+      - server
+    ports:
+      # Host port configurable (set WEB_PORT in .env) — the container always
+      # listens on 3000. Set CLIENT_URL to match the origin you browse to.
+      - "${WEB_PORT:-3000}:3000"
+    restart: unless-stopped
+
+volumes:
+  seed-data:
+  seed-logs:
