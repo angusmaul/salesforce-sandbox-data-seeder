@@ -18,6 +18,9 @@ const { applyConstraints } = require('./lib/field-constraints');
 const { interpretValidationRules } = require('./services/validation-interpreter');
 const archiver = require('archiver');
 const jsforce = require('jsforce');
+// Version from the server's own manifest — present both locally and in the
+// Docker image (which copies only server/, not web/package.json)
+const { version: APP_VERSION } = require('./package.json');
 const fs = require('fs');
 const path = require('path');
 // Use native fetch in Node.js 18+ or polyfill for older versions
@@ -683,7 +686,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    version: '1.0.0-demo'
+    version: APP_VERSION
   });
 });
 
@@ -1086,6 +1089,68 @@ app.post('/api/ai/config/test', async (req, res) => {
     const result = await aiProviders.testProvider(candidate);
     res.json({ success: true, data: result, timestamp: new Date().toISOString() });
   } catch (error) {
+    res.status(500).json({ success: false, error: error.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// AI assistant chat — answers questions using the configured provider, with
+// the session's wizard state folded into the system prompt for context.
+app.post('/api/ai/assistant/:sessionId', async (req, res) => {
+  try {
+    const { messages } = req.body || {};
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ success: false, error: 'messages array is required', timestamp: new Date().toISOString() });
+    }
+    const providerConfig = getAIProviderConfig();
+    if (!providerConfig) {
+      return res.status(400).json({
+        success: false,
+        error: 'No AI provider configured. Set one up on the Settings page.',
+        code: 'AI_NOT_CONFIGURED',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Keep the conversation bounded and roles sane
+    const chat = messages
+      .slice(-20)
+      .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+      .map((m) => ({ role: m.role, content: m.content.slice(0, 8000) }));
+    if (chat.length === 0 || chat[chat.length - 1].role !== 'user') {
+      return res.status(400).json({ success: false, error: 'Last message must be from the user', timestamp: new Date().toISOString() });
+    }
+
+    // Session context (optional — the assistant also works without a session)
+    const session = sessions.get(req.params.sessionId);
+    const contextLines = [];
+    if (session) {
+      contextLines.push(`Current wizard step: ${session.currentStep || 'unknown'}`);
+      if (session.connectionInfo?.instanceUrl) {
+        const conn = session.connectionId ? connections.get(session.connectionId) : null;
+        contextLines.push(`Connected org: ${conn?.orgName || session.connectionInfo.organizationName || session.connectionInfo.instanceUrl}${conn?.isSandbox === false ? ' (NOT a sandbox)' : ''}`);
+      } else {
+        contextLines.push('Not connected to a Salesforce org yet.');
+      }
+      const selected = session.selectedObjects || [];
+      if (selected.length > 0) contextLines.push(`Selected objects (${selected.length}): ${selected.slice(0, 30).join(', ')}`);
+      if (session.aiGenerationPlan) contextLines.push('An AI generation plan has been created for this session.');
+    }
+
+    const systemPrompt = [
+      'You are the built-in assistant for the Salesforce Sandbox Data Seeder, a wizard that generates realistic sample data for Salesforce sandboxes.',
+      'The wizard steps are: Connect (OAuth via External Client App, Client Credentials Flow) → Discovery (schema analysis) → Selection (choose objects) → Configuration (record counts, storage validation) → Preview → Execution (bulk load) → Results (logs, analytics).',
+      'Help the user with Salesforce setup, OAuth errors, object selection, validation/storage errors, and understanding results. Be concise and practical. If you do not know an org-specific fact, say so rather than guessing.',
+      contextLines.length ? `\nCurrent session state:\n${contextLines.map((l) => `- ${l}`).join('\n')}` : ''
+    ].filter(Boolean).join('\n');
+
+    const reply = await aiProviders.callChat(providerConfig, systemPrompt, chat);
+    res.json({
+      success: true,
+      data: { reply, provider: providerConfig.provider, model: providerConfig.model || null },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('AI assistant error:', error.message);
     res.status(500).json({ success: false, error: error.message, timestamp: new Date().toISOString() });
   }
 });

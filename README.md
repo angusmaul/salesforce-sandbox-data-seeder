@@ -8,7 +8,8 @@ Built for sandboxes and Developer Edition orgs: point it at your org, pick your 
 
 - **Guided 7-step wizard** — Connect → Discover → Select → Configure → Preview → Execute → Results, with live progress over WebSocket and a results dashboard (charts, error analysis, ZIP log export)
 - **Saved org connections** — authenticate once with an External Client App; reconnect to any saved org with one click across sessions
-- **Bring your own AI** — Anthropic, any OpenAI-compatible endpoint (OpenAI, Groq, OpenRouter, LM Studio, vLLM), or **local Ollama**, configured in the UI. The AI classifies fields into 60+ semantic categories so generated data is correlated (department ↔ job title, country ↔ phone format, name ↔ email…). Everything still works without AI via pattern-based generation.
+- **Bring your own AI** — Anthropic, any OpenAI-compatible endpoint (OpenAI, Groq, OpenRouter, LM Studio, vLLM), or **local Ollama**, configured on the Settings page or mid-wizard. The AI classifies fields into 60+ semantic categories so generated data is correlated (department ↔ job title, country ↔ phone format, name ↔ email…). Everything still works without AI via pattern-based generation.
+- **Built-in AI assistant** — a chat panel in the wizard, powered by the same provider, that knows your session state (current step, connected org, selected objects) and helps with External Client App setup, OAuth errors, object selection, and load failures
 - **Org-truth generation** — uses your org's real metadata: state/country picklist dependencies (decoded from `validFor` bitmaps), numeric precision/scale, restricted picklists, field lengths, dependency-ordered loading with real record IDs for lookups
 - **Validation-rule aware** — reads your active rules' formulas and error messages, has the AI translate them into field constraints, and generates records that *satisfy* the rules. Rules it can't interpret are reported; a disable-and-restore option exists as a fallback.
 - **Error-driven retry** — failed records are remediated per Salesforce error code (truncate, re-pick, uniquify, fill, drop) and resubmitted; fields that consistently cause failures are learned and skipped
@@ -26,7 +27,7 @@ docker compose up -d
 
 Open **http://localhost:3000** (change with `WEB_PORT` in `.env`). The backend listens on **:3001** — the browser connects to it directly for live progress updates, so both ports must be reachable. Browsing from another machine? Set `CLIENT_URL` and `SERVER_URL` in `.env` to the host you browse to.
 
-Using a local Ollama for AI? In the wizard's AI settings, set the base URL to `http://host.docker.internal:11434` (the container can't see `localhost`).
+Using a local Ollama for AI? In the AI settings (Settings page or the wizard's Preview step), set the base URL to `http://host.docker.internal:11434` (the container can't see `localhost`).
 
 ## Salesforce setup
 

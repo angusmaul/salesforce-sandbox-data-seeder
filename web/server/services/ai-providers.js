@@ -1,16 +1,21 @@
 /**
  * AI Provider Abstraction
  *
- * One entry point — callModel(providerConfig, systemPrompt, userPrompt) — with
- * three adapters. Returns the model's raw text (JSON parsing/repair lives in
- * the caller), or null on any failure.
+ * Two entry points over the same three adapters:
+ *   callModel(providerConfig, systemPrompt, userPrompt) — single-shot; returns
+ *     the model's raw text (JSON parsing/repair lives in the caller), or null
+ *     on any failure. Ollama calls are constrained to JSON output.
+ *   callChat(providerConfig, systemPrompt, messages) — multi-turn; messages is
+ *     an array of { role: 'user'|'assistant', content }. Throws on failure so
+ *     callers can surface the error to the user. Plain-text output.
  *
  * providerConfig: { provider, model?, baseUrl?, apiKey? }
  *   provider 'anthropic'          — official SDK; apiKey required
  *   provider 'openai-compatible'  — {baseUrl}/v1/chat/completions; apiKey optional
  *                                   (covers OpenAI, Groq, OpenRouter, LM Studio,
  *                                   vLLM, and Ollama's compat endpoint)
- *   provider 'ollama'             — native {baseUrl}/api/chat with format:'json';
+ *   provider 'ollama'             — native {baseUrl}/api/chat (format:'json' for
+ *                                   single-shot classification calls);
  *                                   model discovery via {baseUrl}/api/tags
  */
 
@@ -59,7 +64,7 @@ async function responseError(response) {
   return new Error(`HTTP ${response.status}${body ? ` - ${body}` : ''}`);
 }
 
-async function callAnthropic(cfg, systemPrompt, userPrompt) {
+async function callAnthropic(cfg, systemPrompt, messages) {
   if (!cfg.apiKey) throw new Error('Anthropic provider requires an API key');
   const Anthropic = require('@anthropic-ai/sdk');
   const client = new Anthropic({
@@ -71,7 +76,7 @@ async function callAnthropic(cfg, systemPrompt, userPrompt) {
     model: cfg.model,
     max_tokens: MAX_OUTPUT_TOKENS,
     system: systemPrompt,
-    messages: [{ role: 'user', content: userPrompt }]
+    messages
   });
 
   return response.content
@@ -80,7 +85,7 @@ async function callAnthropic(cfg, systemPrompt, userPrompt) {
     .join('');
 }
 
-async function callOpenAICompatible(cfg, systemPrompt, userPrompt) {
+async function callOpenAICompatible(cfg, systemPrompt, messages) {
   const headers = { 'Content-Type': 'application/json' };
   if (cfg.apiKey) headers['Authorization'] = `Bearer ${cfg.apiKey}`;
 
@@ -90,10 +95,7 @@ async function callOpenAICompatible(cfg, systemPrompt, userPrompt) {
     body: JSON.stringify({
       model: cfg.model,
       max_tokens: MAX_OUTPUT_TOKENS,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ]
+      messages: [{ role: 'system', content: systemPrompt }, ...messages]
     })
   });
 
@@ -102,20 +104,18 @@ async function callOpenAICompatible(cfg, systemPrompt, userPrompt) {
   return data.choices?.[0]?.message?.content ?? '';
 }
 
-async function callOllama(cfg, systemPrompt, userPrompt) {
+async function callOllama(cfg, systemPrompt, messages, { jsonFormat = false } = {}) {
   const response = await fetchWithTimeout(`${cfg.baseUrl}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: cfg.model,
       stream: false,
-      // Constrain output to valid JSON — weaker local models need the help
-      format: 'json',
+      // Constrain output to valid JSON — weaker local models need the help.
+      // Only for single-shot classification calls; chat needs plain text.
+      ...(jsonFormat ? { format: 'json' } : {}),
       options: { num_predict: MAX_OUTPUT_TOKENS },
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ]
+      messages: [{ role: 'system', content: systemPrompt }, ...messages]
     })
   });
 
@@ -125,14 +125,14 @@ async function callOllama(cfg, systemPrompt, userPrompt) {
 }
 
 // Provider dispatch that surfaces errors (used by callModel and testProvider)
-async function dispatch(cfg, systemPrompt, userPrompt) {
+async function dispatch(cfg, systemPrompt, messages, opts = {}) {
   switch (cfg.provider) {
     case 'anthropic':
-      return callAnthropic(cfg, systemPrompt, userPrompt);
+      return callAnthropic(cfg, systemPrompt, messages);
     case 'openai-compatible':
-      return callOpenAICompatible(cfg, systemPrompt, userPrompt);
+      return callOpenAICompatible(cfg, systemPrompt, messages);
     case 'ollama':
-      return callOllama(cfg, systemPrompt, userPrompt);
+      return callOllama(cfg, systemPrompt, messages, opts);
     default:
       throw new Error(`Unknown AI provider: ${cfg.provider}`);
   }
@@ -145,12 +145,24 @@ async function dispatch(cfg, systemPrompt, userPrompt) {
 async function callModel(providerConfig, systemPrompt, userPrompt) {
   const cfg = resolveConfig(providerConfig);
   try {
-    const text = await dispatch(cfg, systemPrompt, userPrompt);
+    const text = await dispatch(cfg, systemPrompt, [{ role: 'user', content: userPrompt }], { jsonFormat: true });
     return text || null;
   } catch (err) {
     console.error(`AI call failed (${cfg.provider}/${cfg.model}):`, err.message);
     return null;
   }
+}
+
+/**
+ * Multi-turn conversation with the configured model. messages is an array of
+ * { role: 'user'|'assistant', content }. Throws on failure (unlike callModel)
+ * so callers can show the user what went wrong.
+ */
+async function callChat(providerConfig, systemPrompt, messages) {
+  const cfg = resolveConfig(providerConfig);
+  const text = await dispatch(cfg, systemPrompt, messages);
+  if (!text) throw new Error('Empty response from model');
+  return text;
 }
 
 /** List installed Ollama models via /api/tags. Throws on failure. */
@@ -180,9 +192,13 @@ async function testProvider(providerConfig) {
     const text = await dispatch(
       cfg,
       'You are a connection test. Answer as briefly as possible.',
-      cfg.provider === 'ollama'
-        ? 'Reply with this exact JSON: {"ready": true}'
-        : 'Reply with the single word: ready'
+      [{
+        role: 'user',
+        content: cfg.provider === 'ollama'
+          ? 'Reply with this exact JSON: {"ready": true}'
+          : 'Reply with the single word: ready'
+      }],
+      { jsonFormat: cfg.provider === 'ollama' }
     );
     return { ok: !!text, models, ...(text ? {} : { error: 'Empty response from model' }) };
   } catch (err) {
@@ -192,6 +208,7 @@ async function testProvider(providerConfig) {
 
 module.exports = {
   callModel,
+  callChat,
   testProvider,
   listOllamaModels,
   resolveConfig,

@@ -20,8 +20,9 @@ export default function DocsPage() {
         '1. Create an External Client App in Salesforce with Client Credentials Flow',
         '2. Note your Client ID and Client Secret',
         '3. Click "Start Data Generation Wizard" on the homepage',
-        '4. Enter your OAuth credentials when prompted',
-        '5. Follow the guided wizard steps'
+        '4. Enter your OAuth credentials when prompted — saved connections reconnect in one click',
+        '5. Optionally configure an AI provider under Settings for smarter data generation',
+        '6. Follow the guided wizard steps'
       ]
     },
     {
@@ -29,10 +30,11 @@ export default function DocsPage() {
       title: 'Salesforce Setup',
       description: 'Configure your External Client App',
       content: [
-        '• Go to Setup → Apps → App Manager → New Connected App',
+        '• Go to Setup → Apps → External Client Apps → New External Client App',
         '• Enable OAuth Settings with Client Credentials Flow',
         '• Select these scopes: API, Refresh Token',
         '• No callback URL needed for Client Credentials Flow',
+        '• Assign a run-as user for the Client Credentials Flow',
         '• Save and note the Consumer Key and Consumer Secret'
       ]
     },
@@ -58,7 +60,8 @@ export default function DocsPage() {
         '• Frontend: Next.js with TypeScript and Tailwind CSS',
         '• Backend: Express.js with Socket.IO for real-time updates',
         '• Authentication: Client Credentials Flow (no user login required)',
-        '• Data Generation: Faker.js for business-realistic data',
+        '• Data Generation: AI field classification + semantic library, with Faker.js fallback',
+        '• AI Providers: bring your own — Anthropic, OpenAI-compatible, or local Ollama (optional)',
         '• Storage: File-based session persistence with auto-cleanup',
         '• Logging: Comprehensive audit trails matching CLI format'
       ]
@@ -187,10 +190,10 @@ export default function DocsPage() {
                 • <strong>README.md:</strong> Complete technical documentation in the project repository
               </p>
               <p className="text-blue-800">
-                • <strong>CLAUDE.md:</strong> Detailed development log and implementation notes
+                • <strong>AI Settings:</strong> Configure your AI provider on the <Link href="/settings" className="underline">Settings page</Link> — used for field classification and the assistant
               </p>
               <p className="text-blue-800">
-                • <strong>Built-in AI Assistant:</strong> Use the Claude AI helper in the wizard for real-time assistance
+                • <strong>Built-in AI Assistant:</strong> Open the assistant in the wizard for context-aware help with setup and errors
               </p>
             </div>
           </div>
