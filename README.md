@@ -119,7 +119,7 @@ npx jest web/server                               # web server suites (plain JS)
 
 ## Contributing
 
-Issues and PRs welcome. Fork, branch, make your change (with tests where it makes sense), and open a pull request.
+Issues and PRs welcome. Fork, branch, make your change (with tests where it makes sense), and open a pull request. CodeRabbit reviews every PR automatically; address or discuss its findings before requesting human review.
 
 ## License
 

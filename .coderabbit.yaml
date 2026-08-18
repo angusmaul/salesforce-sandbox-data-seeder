@@ -1,0 +1,38 @@
+# CodeRabbit configuration — https://docs.coderabbit.ai/reference/configuration
+language: en-US
+
+reviews:
+  profile: chill              # fewer nitpicks; flag what matters
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+  path_filters:
+    - "!dist/**"
+    - "!web/dist/**"
+    - "!**/package-lock.json"
+    - "!logs/**"
+    - "!.playwright-mcp/**"
+  path_instructions:
+    - path: "web/server/**/*.js"
+      instructions: >-
+        Server code is plain CommonJS JavaScript by convention — do not suggest
+        converting to TypeScript or ES modules. Sessions persist via
+        PersistentStorage: sessions.set(key, value) auto-saves; there is no
+        manual save method. Long-running endpoints must re-fetch the session
+        before writing back to avoid lost updates.
+    - path: "web/{pages,components}/**/*.tsx"
+      instructions: >-
+        Frontend is TypeScript React (Next.js pages router) with Tailwind.
+        The browser talks to the backend via relative /api and /logs URLs
+        proxied through Next.js rewrites — flag hardcoded backend hosts/ports.
+    - path: "src/**/*.ts"
+      instructions: >-
+        CLI code (Commander.js, CommonJS output). Core types live in
+        src/models/salesforce.ts and are re-exported by web/shared/types/api.ts.
+
+chat:
+  auto_reply: true
