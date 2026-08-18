@@ -18,6 +18,19 @@ Built for sandboxes and Developer Edition orgs: point it at your org, pick your 
 
 ## Quick start (Docker)
 
+Prebuilt images — no clone needed:
+
+```bash
+curl -O https://raw.githubusercontent.com/angusmaul/salesforce-sandbox-data-seeder/main/docker-compose.prebuilt.yml
+curl -o .env https://raw.githubusercontent.com/angusmaul/salesforce-sandbox-data-seeder/main/docker.env.example
+# edit .env: set SESSION_SECRET (e.g. `openssl rand -hex 32`)
+docker compose -f docker-compose.prebuilt.yml up -d
+```
+
+Images are on GHCR (`ghcr.io/angusmaul/salesforce-sandbox-data-seeder-{server,web}`), tagged `latest` and per release (pin with `IMAGE_TAG=1.1.0` in `.env`).
+
+Or build from source:
+
 ```bash
 git clone https://github.com/angusmaul/salesforce-sandbox-data-seeder.git
 cd salesforce-sandbox-data-seeder
@@ -100,7 +113,7 @@ All URLs default to localhost — a bare dev setup needs none of these.
 
 ## Deployment
 
-- **Docker Compose** — see [docker-compose.yml](docker-compose.yml); state persists in named volumes (`seed-data`, `seed-logs`)
+- **Docker Compose** — prebuilt images via [docker-compose.prebuilt.yml](docker-compose.prebuilt.yml), or build from source with [docker-compose.yml](docker-compose.yml); state persists in named volumes (`seed-data`, `seed-logs`)
 - **LXC / systemd** — see [deploy/lxc/README.md](deploy/lxc/README.md) for a two-unit native install guide
 
 ## Safety notes
