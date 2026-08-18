@@ -18,6 +18,9 @@ const { applyConstraints } = require('./lib/field-constraints');
 const { interpretValidationRules } = require('./services/validation-interpreter');
 const archiver = require('archiver');
 const jsforce = require('jsforce');
+// Version from the server's own manifest — present both locally and in the
+// Docker image (which copies only server/, not web/package.json)
+const { version: APP_VERSION } = require('./package.json');
 const fs = require('fs');
 const path = require('path');
 // Use native fetch in Node.js 18+ or polyfill for older versions
@@ -683,7 +686,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    version: '1.0.0-demo'
+    version: APP_VERSION
   });
 });
 
