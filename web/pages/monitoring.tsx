@@ -31,6 +31,12 @@ export default function MonitoringPage() {
   const [sessions, setSessions] = useState<SessionInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState(new Date());
+  const [backendUp, setBackendUp] = useState<boolean | null>(null);
+  const [origin, setOrigin] = useState('');
+
+  useEffect(() => {
+    setOrigin(window.location.origin);
+  }, []);
 
   const fetchData = async () => {
     try {
@@ -38,6 +44,7 @@ export default function MonitoringPage() {
       const healthResponse = await fetch('/api/health');
       const healthData = await healthResponse.json();
       setHealth(healthData);
+      setBackendUp(healthResponse.ok);
 
       // Fetch session information
       const sessionsResponse = await fetch('/api/sessions/list');
@@ -55,6 +62,7 @@ export default function MonitoringPage() {
       setLastUpdate(new Date());
     } catch (error) {
       console.error('Failed to fetch monitoring data:', error);
+      setBackendUp(false);
     } finally {
       setLoading(false);
     }
@@ -209,11 +217,13 @@ export default function MonitoringPage() {
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-600">Frontend:</span>
-                      <span className="font-medium text-green-600">Running (Port 3000)</span>
+                      <span className="font-medium text-green-600">Running{origin ? ` (${origin})` : ''}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-600">Backend:</span>
-                      <span className="font-medium text-green-600">Running (Port 3001)</span>
+                      <span className={`font-medium ${backendUp ? 'text-green-600' : 'text-red-600'}`}>
+                        {backendUp === null ? 'Checking...' : backendUp ? 'Reachable (via /api proxy)' : 'Unreachable'}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -253,13 +263,15 @@ export default function MonitoringPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <h4 className="font-medium text-gray-900">Frontend</h4>
-                    <p className="text-sm text-gray-600">http://localhost:3000</p>
-                    <p className="text-sm text-gray-600">http://localhost:3000/wizard</p>
+                    <p className="text-sm text-gray-600">{origin || '...'}</p>
+                    <p className="text-sm text-gray-600">{origin ? `${origin}/wizard` : '...'}</p>
                   </div>
                   <div className="space-y-2">
                     <h4 className="font-medium text-gray-900">Backend API</h4>
-                    <p className="text-sm text-gray-600">http://localhost:3001/api</p>
-                    <p className="text-sm text-gray-600">http://localhost:3001/api/health</p>
+                    <p className="text-sm text-gray-600">{origin ? `${origin}/api (proxied)` : '...'}</p>
+                    <p className="text-sm text-gray-600">
+                      {origin ? `${new URL(origin).protocol}//${new URL(origin).hostname}:3001 (Socket.IO, direct)` : '...'}
+                    </p>
                   </div>
                 </div>
               </div>

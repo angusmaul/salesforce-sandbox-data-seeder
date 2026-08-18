@@ -20,7 +20,7 @@ src/                          # CLI tool (TypeScript, CommonJS)
   models/salesforce.ts        # Core type definitions
   services/                   # Salesforce API, discovery, bulk loading
 web/
-  pages/                      # Next.js pages (wizard.tsx is the main UI)
+  pages/                      # Next.js pages (wizard.tsx is the main UI; settings.tsx hosts AI provider config)
   components/wizard/steps/    # 7-step wizard: Auth → Discovery → Selection → Config → Preview → Execution → Results
   hooks/                      # useSession, useWebSocket
   server/
@@ -130,7 +130,7 @@ Key endpoint groups:
 - `/api/config/*` — Configuration management
 - `/api/execution/*` — Data loading execution and results
 - `/api/generation/*` — Generation plan and preview
-- `/api/ai/*` — AI classification, plan management, categories
+- `/api/ai/*` — AI classification, plan management, categories, assistant chat (`POST /api/ai/assistant/:sessionId`)
 - `/api/logs/*` — Log download
 
 ### Data Generation Pipeline

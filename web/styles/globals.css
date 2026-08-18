@@ -145,3 +145,53 @@
   background-size: 200px 100%;
   animation: shimmer 1.5s infinite;
 }
+/* Assistant chat markdown — restore element styling stripped by the Tailwind
+   preflight reset, scoped to assistant message bubbles. */
+.assistant-markdown > :first-child {
+  margin-top: 0;
+}
+.assistant-markdown > :last-child {
+  margin-bottom: 0;
+}
+.assistant-markdown p,
+.assistant-markdown ul,
+.assistant-markdown ol,
+.assistant-markdown table,
+.assistant-markdown blockquote,
+.assistant-markdown pre {
+  @apply my-2;
+}
+.assistant-markdown h1,
+.assistant-markdown h2,
+.assistant-markdown h3,
+.assistant-markdown h4 {
+  @apply font-semibold mt-3 mb-1.5;
+}
+.assistant-markdown h1 { @apply text-base; }
+.assistant-markdown h2 { @apply text-base; }
+.assistant-markdown h3 { @apply text-sm; }
+.assistant-markdown ul { @apply list-disc pl-5; }
+.assistant-markdown ol { @apply list-decimal pl-5; }
+.assistant-markdown li { @apply my-0.5; }
+.assistant-markdown a { @apply text-blue-600 underline; }
+.assistant-markdown code {
+  @apply bg-gray-200 rounded px-1 py-0.5 text-xs font-mono;
+}
+.assistant-markdown pre {
+  @apply bg-gray-800 text-gray-100 rounded-md p-3 overflow-x-auto text-xs;
+}
+.assistant-markdown pre code {
+  @apply bg-transparent p-0 text-inherit;
+}
+.assistant-markdown blockquote {
+  @apply border-l-4 border-gray-300 pl-3 text-gray-600;
+}
+.assistant-markdown table {
+  @apply w-full text-xs border-collapse block overflow-x-auto;
+}
+.assistant-markdown th,
+.assistant-markdown td {
+  @apply border border-gray-300 px-2 py-1 text-left align-top;
+}
+.assistant-markdown th { @apply bg-gray-200 font-semibold; }
+.assistant-markdown hr { @apply my-3 border-gray-300; }

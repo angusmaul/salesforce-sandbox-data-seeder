@@ -100,8 +100,8 @@ export default function HomePage() {
     },
     {
       icon: LightBulbIcon,
-      title: 'AI Assistant',
-      description: 'Get help from Claude AI for troubleshooting errors and best practices'
+      title: 'AI-Powered Generation',
+      description: 'Bring your own AI provider — Anthropic, OpenAI-compatible, or local Ollama — for semantic field classification and a built-in assistant'
     },
     {
       icon: RocketLaunchIcon,
@@ -146,6 +146,9 @@ export default function HomePage() {
                 </Link>
                 <Link href="/monitoring" className="text-gray-500 hover:text-gray-900 transition-colors">
                   Monitoring
+                </Link>
+                <Link href="/settings" className="text-gray-500 hover:text-gray-900 transition-colors">
+                  Settings
                 </Link>
               </nav>
             </div>
@@ -320,8 +323,8 @@ export default function HomePage() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
             <div className="text-center text-gray-500">
               <p>
-                &copy; 2024 Salesforce Sandbox Data Seeder. 
-                Built with Next.js, Express, and Claude AI.
+                &copy; 2026 Salesforce Sandbox Data Seeder.
+                Built with Next.js and Express. Bring your own AI provider.
               </p>
             </div>
           </div>
