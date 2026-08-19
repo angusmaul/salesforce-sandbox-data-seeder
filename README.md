@@ -56,7 +56,7 @@ Use your sandbox login URL (`https://test.salesforce.com`) or your org's My Doma
 
 ## Local development
 
-Requires Node.js 18+.
+Requires Node.js 20+ (22 LTS recommended).
 
 ```bash
 # Web app (Express backend :3001 + Next.js frontend :3000)

@@ -3,13 +3,13 @@
 # manifest with just the backend's ~13 deps (not the frontend's next/react/etc).
 
 # ---- deps ----
-FROM node:20-alpine AS deps
+FROM node:22-alpine AS deps
 WORKDIR /app
 COPY server/package.json server/package-lock.json ./
 RUN npm ci
 
 # ---- runtime ----
-FROM node:20-alpine AS runtime
+FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3001 \
