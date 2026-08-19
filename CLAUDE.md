@@ -157,5 +157,4 @@ Correlation context is built per-record via `buildCorrelatedContext()` and passe
 - WebSocket (Socket.IO) provides real-time progress updates during execution
 
 ## Node.js Requirements
-- CLI: Node.js >= 16
-- Web: Node.js >= 18
+- CLI and web: Node.js >= 20 (22 LTS recommended; Docker images run node:22-alpine)
