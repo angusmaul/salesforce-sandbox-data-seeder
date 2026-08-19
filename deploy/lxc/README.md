@@ -1,28 +1,74 @@
-# Running the web app in an LXC container (systemd)
+# Running the web app in an LXC container
+
+Two ways to run the app in an LXC:
+
+- **Option A — prebuilt images (Docker inside the LXC)**: fastest; pulls the
+  published GHCR images, no Node toolchain or build step in the container.
+- **Option B — native Node + systemd**: no Docker layer; builds from source and
+  runs two hardened systemd services. Use this if you avoid Docker-in-LXC.
+
+Both tested against a Debian 12 / Ubuntu 24.04 unprivileged LXC. Run as root
+inside the container unless noted.
+
+## Option A: prebuilt images (Docker in the LXC)
+
+On Proxmox, the container needs nesting and keyctl: **Options → Features →
+nesting=1, keyctl=1** (`pct set <ctid> --features nesting=1,keyctl=1`), then
+install Docker:
+
+```bash
+curl -fsSL https://get.docker.com | sh
+```
+
+Fetch the prebuilt compose file and configure:
+
+```bash
+mkdir -p /opt/sf-seed && cd /opt/sf-seed
+curl -fO https://raw.githubusercontent.com/angusmaul/salesforce-sandbox-data-seeder/main/docker-compose.prebuilt.yml
+curl -fo .env.example https://raw.githubusercontent.com/angusmaul/salesforce-sandbox-data-seeder/main/docker.env.example
+[ -f .env ] || cp .env.example .env
+# edit .env:
+#   SESSION_SECRET  — required (openssl rand -hex 32)
+#   CLIENT_URL      — http://<container-ip>:3000 (the origin you browse to)
+#   SERVER_URL      — http://<container-ip>:3001
+#   IMAGE_TAG       — optionally pin a release (e.g. 1.1.0); defaults to latest
+docker compose -f docker-compose.prebuilt.yml up -d
+```
+
+Browse to `http://<container-ip>:3000`. As with every deployment, port 3001 must
+also be reachable (direct Socket.IO) and `CLIENT_URL` must equal the origin you
+browse to. State persists in the `seed-data` / `seed-logs` Docker volumes.
+
+Updating:
+
+```bash
+cd /opt/sf-seed
+docker compose -f docker-compose.prebuilt.yml pull
+docker compose -f docker-compose.prebuilt.yml up -d
+```
+
+## Option B: native Node + systemd (build from source)
 
 Two `systemd` services on one host: `sf-seed-server` (Express backend, port 3001)
 and `sf-seed-web` (Next.js frontend, port 3000). Both run as an unprivileged
 `sfseed` user. Because they share a host, the frontend proxies `/api` and `/logs`
 to the backend at the default `http://localhost:3001` — no build arg needed.
 
-Tested against a Debian 12 / Ubuntu 24.04 unprivileged LXC. Run as root inside
-the container unless noted.
-
-## 1. Node.js 20
+### 1. Node.js 22
 
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 apt-get install -y nodejs git
 ```
 
-## 2. User and directories
+### 2. User and directories
 
 ```bash
 useradd --system --home /opt/sf-seed --shell /usr/sbin/nologin sfseed
 mkdir -p /opt/sf-seed /etc/sf-seed /var/lib/sf-seed/logs
 ```
 
-## 3. Get the code and build
+### 3. Get the code and build
 
 ```bash
 git clone <repo-url> /opt/sf-seed
@@ -35,7 +81,7 @@ If you set non-default origins, they are only needed at runtime here (backend re
 them from the env file) — the frontend's proxy target uses the localhost default,
 which is correct for a single host, so no rebuild is required to change URLs.
 
-## 4. Configuration
+### 4. Configuration
 
 ```bash
 cp /opt/sf-seed/deploy/lxc/sf-seed.env.example /etc/sf-seed/sf-seed.env
@@ -46,7 +92,7 @@ chmod 600 /etc/sf-seed/sf-seed.env
 chown -R sfseed:sfseed /opt/sf-seed /var/lib/sf-seed
 ```
 
-## 5. Install and start the services
+### 5. Install and start the services
 
 ```bash
 cp /opt/sf-seed/deploy/lxc/sf-seed-server.service /etc/systemd/system/
@@ -63,14 +109,14 @@ journalctl -u sf-seed-server -f
 curl -s http://localhost:3001/api/health
 ```
 
-## Access
+### Access
 
 Browse to `http://<container-ip>:3000`. The Socket.IO connection for live progress
 goes directly from the browser to `<container-ip>:3001`, so **`CLIENT_URL` in the env
 file must equal the origin you browse to** or CORS will reject the WebSocket. Both
 ports must be reachable from your machine.
 
-## Updating
+### Updating
 
 ```bash
 cd /opt/sf-seed && git pull

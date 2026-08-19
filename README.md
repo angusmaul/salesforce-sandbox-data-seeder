@@ -21,8 +21,9 @@ Built for sandboxes and Developer Edition orgs: point it at your org, pick your 
 Prebuilt images — no clone needed:
 
 ```bash
-curl -O https://raw.githubusercontent.com/angusmaul/salesforce-sandbox-data-seeder/main/docker-compose.prebuilt.yml
-curl -o .env https://raw.githubusercontent.com/angusmaul/salesforce-sandbox-data-seeder/main/docker.env.example
+curl -fO https://raw.githubusercontent.com/angusmaul/salesforce-sandbox-data-seeder/main/docker-compose.prebuilt.yml
+curl -fo .env.example https://raw.githubusercontent.com/angusmaul/salesforce-sandbox-data-seeder/main/docker.env.example
+[ -f .env ] || cp .env.example .env
 # edit .env: set SESSION_SECRET (e.g. `openssl rand -hex 32`)
 docker compose -f docker-compose.prebuilt.yml up -d
 ```
