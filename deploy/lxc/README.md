@@ -12,8 +12,9 @@ inside the container unless noted.
 
 ## Option A: prebuilt images (Docker in the LXC)
 
-On Proxmox, the container needs nesting: **Options → Features → nesting=1**
-(`pct set <ctid> --features nesting=1`), then install Docker:
+On Proxmox, the container needs nesting and keyctl: **Options → Features →
+nesting=1, keyctl=1** (`pct set <ctid> --features nesting=1,keyctl=1`), then
+install Docker:
 
 ```bash
 curl -fsSL https://get.docker.com | sh
@@ -23,8 +24,9 @@ Fetch the prebuilt compose file and configure:
 
 ```bash
 mkdir -p /opt/sf-seed && cd /opt/sf-seed
-curl -O https://raw.githubusercontent.com/angusmaul/salesforce-sandbox-data-seeder/main/docker-compose.prebuilt.yml
-curl -o .env https://raw.githubusercontent.com/angusmaul/salesforce-sandbox-data-seeder/main/docker.env.example
+curl -fO https://raw.githubusercontent.com/angusmaul/salesforce-sandbox-data-seeder/main/docker-compose.prebuilt.yml
+curl -fo .env.example https://raw.githubusercontent.com/angusmaul/salesforce-sandbox-data-seeder/main/docker.env.example
+[ -f .env ] || cp .env.example .env
 # edit .env:
 #   SESSION_SECRET  — required (openssl rand -hex 32)
 #   CLIENT_URL      — http://<container-ip>:3000 (the origin you browse to)
@@ -52,10 +54,10 @@ and `sf-seed-web` (Next.js frontend, port 3000). Both run as an unprivileged
 `sfseed` user. Because they share a host, the frontend proxies `/api` and `/logs`
 to the backend at the default `http://localhost:3001` — no build arg needed.
 
-### 1. Node.js 20
+### 1. Node.js 22
 
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 apt-get install -y nodejs git
 ```
 
